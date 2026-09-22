@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>MindAR tracking spike</title>
+<script src="https://cdn.jsdelivr.net/npm/aframe@1.5.0/dist/aframe-master.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+<style>
+  body { margin: 0; font: 14px monospace; }
+  #wrap { position: absolute; width: 100%; height: 100%; overflow: hidden; }
+  #dbg { position: fixed; top: 0; left: 0; z-index: 10000; background: #000c; color: #0f0; padding: 6px 8px; white-space: pre; }
+  #start, #unmute { position: fixed; z-index: 10001; left: 50%; transform: translateX(-50%); padding: 14px 22px; font: inherit; font-size: 18px; }
+  #start { top: 45%; }
+  #unmute { bottom: 24px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="dbg">booting</div>
+<button id="start">Start AR</button>
+<button id="unmute" hidden>Tap to unmute</button>
+
+<div id="vids" style="display:none">
+  <video id="v0" src="./assets/video0.mp4" preload="metadata" loop muted playsinline webkit-playsinline crossorigin="anonymous"></video>
+  <video id="v1" src="./assets/video1.mp4" preload="metadata" loop muted playsinline webkit-playsinline crossorigin="anonymous"></video>
+  <video id="v2" src="./assets/video2.mp4" preload="metadata" loop muted playsinline webkit-playsinline crossorigin="anonymous"></video>
+</div>
+
+<div id="wrap">
+  <a-scene
+    mindar-image="imageTargetSrc: ./assets/targets.mind; maxTrack: 1; autoStart: false; uiLoading: no; uiScanning: no; uiError: no"
+    embedded color-space="sRGB"
+    renderer="colorManagement: true, physicallyCorrectLights"
+    xr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+    <a-entity class="tgt" mindar-image-target="targetIndex: 0">
+      <a-video class="scr" src="#v0" width="1" height="1" position="0 0 0.001"></a-video>
+    </a-entity>
+    <a-entity class="tgt" mindar-image-target="targetIndex: 1">
+      <a-video class="scr" src="#v1" width="1" height="1" position="0 0 0.001"></a-video>
+    </a-entity>
+    <a-entity class="tgt" mindar-image-target="targetIndex: 2">
+      <a-video class="scr" src="#v2" width="1" height="1" position="0 0 0.001"></a-video>
+    </a-entity>
+  </a-scene>
+</div>
+
+<script>
+// Height/width of each PRINTED target image. 0 = fall back to the video's own
+// aspect ratio (correct if you exported each video to match its photo).
+// The anchor space is normalised so width 1 unit == full width of the target,
+// so plane width stays 1 and only height changes.
+const ASPECT = [1.3333, 1.3333, 0.75];
+
+const scene = document.querySelector('a-scene');
+const getAR = () => scene.systems['mindar-image-system'];
+const targets = [...document.querySelectorAll('.tgt')];
+const videos = [0, 1, 2].map(i => document.querySelector('#v' + i));
+const dbg = document.querySelector('#dbg');
+const startBtn = document.querySelector('#start');
+const unmuteBtn = document.querySelector('#unmute');
+
+let current = -1, startedAt = 0, ttfd = null, losses = 0, state = 'idle', lastErr = '';
+
+const diag = () => [
+  'af' + (window.AFRAME ? AFRAME.version : '-MISSING'),
+  'mindar:' + (scene.systems && scene.systems['mindar-image-system'] ? 'ok' : 'MISSING'),
+  'scene:' + (scene.hasLoaded ? 'loaded' : 'NOT-LOADED')
+].join(' ');
+
+window.addEventListener('error', e => { lastErr = (e.message || e.error) + ''; draw(); });
+
+const draw = () => {
+  dbg.textContent =
+    'state    ' + state +
+    '\ntarget   ' + (current < 0 ? 'none' : current) +
+    '\nttfd     ' + (ttfd === null ? '-' : ttfd + ' ms') +
+    '\nlosses   ' + losses +
+    '\naudio    ' + (videos[0].muted ? 'muted' : 'on') +
+    '\nlibs     ' + diag() +
+    (lastErr ? '\nERROR    ' + lastErr : '');
+};
+draw();
+
+// Size each plane to its target's aspect ratio.
+videos.forEach((v, i) => {
+  const fit = () => {
+    const a = ASPECT[i] || (v.videoHeight / v.videoWidth) || 1;
+    targets[i].querySelector('.scr').setAttribute('height', a.toFixed(4));
+  };
+  v.readyState >= 1 ? fit() : v.addEventListener('loadedmetadata', fit);
+});
+
+targets.forEach((t, i) => {
+  t.addEventListener('targetFound', () => {
+    current = i;
+    if (ttfd === null && startedAt) { ttfd = Math.round(performance.now() - startedAt); }
+    videos[i].play().catch(e => console.warn('play blocked', e));
+    draw();
+  });
+  t.addEventListener('targetLost', () => {
+    if (current === i) current = -1;
+    losses++;
+    videos[i].pause();
+    draw();
+  });
+});
+
+scene.addEventListener('arReady', () => { state = 'scanning'; draw(); });
+scene.addEventListener('arError', e => { state = 'error: ' + (e.detail && e.detail.error); draw(); });
+
+startBtn.addEventListener('click', () => {
+  startBtn.hidden = true;
+  unmuteBtn.hidden = false;
+  state = 'starting camera';
+  draw();
+  startedAt = performance.now();
+  try {
+    const ar = getAR();
+    if (!ar) throw new Error('mindar system not registered');
+    ar.start();
+  } catch (err) {
+    lastErr = err.message;
+    state = 'start failed';
+  }
+  draw();
+});
+
+// iOS Safari blocks audio until a user gesture; one tap, once per page load.
+unmuteBtn.addEventListener('click', () => {
+  videos.forEach(v => { v.muted = false; });
+  if (current >= 0) videos[current].play().catch(() => {});
+  unmuteBtn.hidden = true;
+  draw();
+});
+
+setInterval(draw, 500);
+</script>
+</body>
+</html>
