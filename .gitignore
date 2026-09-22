@@ -1,13 +1,45 @@
+# dependencies
 node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# next.js / build
 .next/
 out/
 build/
+*.tsbuildinfo
+next-env.d.ts
+
+# env — never commit secrets
 .env
 .env*.local
+.env.production
+
+# deploy / tooling
 .vercel
+.supabase/
 *.pem
 *-key.pem
-.DS_Store
+
+# testing
+coverage/
+
+# logs
 npm-debug.log*
-/assets/*.mp4
-/assets/*.mind
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# os
+.DS_Store
+*.pem
+
+# customer media — never in git
+assets/*.mp4
+assets/*.mind
+*.mp4
