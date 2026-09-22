@@ -29,7 +29,9 @@ echo "==> installing Supabase stubs (auth schema, roles)"
 create schema if not exists auth;
 create table auth.users (id uuid primary key);
 create or replace function auth.uid() returns uuid
-  language sql stable as $fn$ select null::uuid $fn$;
+  language sql stable as $fn$
+    select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+  $fn$;
 do $$ begin
   create role anon nologin;            exception when duplicate_object then null; end $$;
 do $$ begin
@@ -106,6 +108,9 @@ begin
   raise notice 'all invariants hold';
 end $$;
 SQL
+
+echo "==> asserting policy behaviour"
+"${PSQL[@]}" < scripts/test-policies.sql
 
 echo "==> policy inventory"
 "${PSQL[@]}" -c "select tablename, policyname, roles, cmd from pg_policies where schemaname='public' order by tablename, policyname;"

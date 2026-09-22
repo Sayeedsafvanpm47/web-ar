@@ -11,7 +11,7 @@ everything here is designed against.
 | Area | State |
 |---|---|
 | Next.js app shell | scaffolded (Next 16.3.6, React 19, TS strict, Tailwind) |
-| Postgres schema + RLS | written, verified against a throwaway container |
+| Postgres schema + RLS | staff, customers, books, memories — verified structurally and behaviourally |
 | Supabase project | **not created yet** — env placeholders only |
 | Cloudflare R2 | **not set up yet** |
 | /admin | not started |
@@ -53,7 +53,9 @@ table**. If it held even a SELECT policy, anyone with the public anon key could
 enumerate every book and every customer's memories in a single query. Instead:
 
 - Public reads go through server-side code using the service role key, scoped
-  to the exact book id in the URL, rejecting books with `revoked_at` set.
+  to the exact book id in the URL. A book is served only when it is not
+  revoked **and** inside its paid hosting term — `public.book_is_live()` is the
+  single definition of that. A null `expiry_date` fails closed.
 - Video is served only via short-lived signed R2 URLs generated server-side.
 - `books.revoked_at` is the kill switch for a leaked QR code. It cannot be
   undone by reprinting — issue a new book id.
@@ -85,5 +87,10 @@ Supabase's `auth` schema and roles, applies every migration, and then asserts:
 - no table left with RLS on and zero policies (a silent deny-all)
 - no policy reachable by `anon`
 - every `id` column defaults to `gen_random_uuid()` (hard rule 3)
+
+It then runs `scripts/test-policies.sql`, which connects as `anon`, as a
+signed-in non-staff user, and as staff, and asserts what each can actually
+read and write. Structural checks cannot see a policy whose *logic* is wrong;
+this catches those.
 
 Never run migrations against production (hard rule 5).
