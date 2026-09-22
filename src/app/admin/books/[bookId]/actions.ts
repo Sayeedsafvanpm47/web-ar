@@ -63,7 +63,6 @@ export async function startUpload(
 
   const supabase = await createClient();
 
-  // Confirm the book exists and is visible to this staff member under RLS.
   const { data: book } = await supabase
     .from('books')
     .select('id')
@@ -137,16 +136,38 @@ export async function confirmUpload(
 
   if (error) return { ok: false, error: error.message };
 
+  await invalidateCompiledTargets(bookId);
   revalidatePath(`/admin/books/${bookId}`);
   return { ok: true };
 }
 
 /**
- * Removes a memory and its stored files.
+ * Any change to a book's photos makes its compiled targets.mind stale, so the
+ * pointer is cleared and the file must be rebuilt.
  *
- * Storage first: if the row went first and the delete failed, the objects
- * would be orphaned with nothing left pointing at them. A failed object
+ * This is why it matters: a .mind stores no names, only positions. If the set
+ * of photos changes but the old file stays in place, the positions no longer
+ * mean what the database says they mean, and videos play on the wrong photos
+ * with no error anywhere.
+ */
+async function invalidateCompiledTargets(bookId: string): Promise<void> {
+  const supabase = await createClient();
+  await supabase
+    .from('books')
+    .update({ mind_object_key: null, mind_compiled_at: null })
+    .eq('id', bookId)
+    .not('mind_object_key', 'is', null);
+}
+
+/**
+ * Removes a memory, its stored files, and closes the gap it leaves behind.
+ *
+ * Storage goes first: if the row went first and the object delete failed, the
+ * files would be orphaned with nothing pointing at them. A failed object
  * delete leaves the row intact and the operation retryable.
+ *
+ * Objects that were never uploaded are not an error — an incomplete memory has
+ * no files to remove, and refusing to delete the row would strand it.
  */
 export async function deleteMemory(
   bookId: string,
@@ -154,25 +175,72 @@ export async function deleteMemory(
 ): Promise<{ ok: boolean; error?: string }> {
   await requireStaff();
 
-  try {
-    await deleteObject(photoKey(bookId, memoryId));
-    await deleteObject(videoKey(bookId, memoryId));
-  } catch (err) {
-    return {
-      ok: false,
-      error: `Could not delete the stored files: ${(err as Error).message}`,
-    };
+  const supabase = await createClient();
+
+  const { data: memory } = await supabase
+    .from('memories')
+    .select('target_index, photo_object_key, video_object_key')
+    .eq('id', memoryId)
+    .eq('book_id', bookId)
+    .maybeSingle();
+
+  if (!memory) return { ok: false, error: 'Memory not found.' };
+
+  for (const key of [memory.photo_object_key, memory.video_object_key]) {
+    if (!key) continue;
+    try {
+      await deleteObject(key as string);
+    } catch (err) {
+      const name = (err as { name?: string }).name;
+      // A missing object is already in the desired state.
+      if (name !== 'NoSuchKey' && name !== 'NotFound') {
+        return {
+          ok: false,
+          error: `Could not delete the stored files: ${(err as Error).message}`,
+        };
+      }
+    }
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase
+  const { error: deleteError } = await supabase
     .from('memories')
     .delete()
     .eq('id', memoryId)
     .eq('book_id', bookId);
 
-  if (error) return { ok: false, error: error.message };
+  if (deleteError) return { ok: false, error: deleteError.message };
 
+  // Close the gap. target_index must stay contiguous from 0, because it is
+  // the position in the compiled .mind file. A hole would shift every later
+  // photo onto the wrong video.
+  const removed = memory.target_index as number;
+
+  const { data: after } = await supabase
+    .from('memories')
+    .select('id, target_index')
+    .eq('book_id', bookId)
+    .gt('target_index', removed)
+    .order('target_index', { ascending: true });
+
+  // Ascending order matters: each slot below is vacated before the next row
+  // moves into it, so the unique (book_id, target_index) constraint never
+  // trips mid-renumber.
+  for (const row of after ?? []) {
+    const { error } = await supabase
+      .from('memories')
+      .update({ target_index: (row.target_index as number) - 1 })
+      .eq('id', row.id as string);
+    if (error) {
+      return {
+        ok: false,
+        error:
+          `Deleted, but renumbering failed at index ${row.target_index}: ` +
+          `${error.message}. Indexes are now inconsistent — fix before compiling.`,
+      };
+    }
+  }
+
+  await invalidateCompiledTargets(bookId);
   revalidatePath(`/admin/books/${bookId}`);
   return { ok: true };
 }
