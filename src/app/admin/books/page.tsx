@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 import { Badge } from '@/components/ui/badge';
 import {
   Card,
@@ -107,7 +109,11 @@ export default async function BooksPage() {
               const state = liveState(b, today);
               return (
                 <TableRow key={b.id}>
-                  <TableCell className="font-medium">{b.title}</TableCell>
+                  <TableCell className="font-medium">
+                    <Link href={`/admin/books/${b.id}`} className="hover:underline">
+                      {b.title}
+                    </Link>
+                  </TableCell>
                   <TableCell>{b.customers?.full_name ?? '—'}</TableCell>
                   <TableCell>{b.status}</TableCell>
                   <TableCell>
