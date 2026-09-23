@@ -65,7 +65,7 @@ export default async function BookLanding({
       </div>
 
       <ol className="text-muted-foreground mx-auto max-w-xs space-y-2 text-left text-sm">
-        <li>1. Tap Start and allow camera access.</li>
+        <li>1. Tap Scan to play and allow camera access.</li>
         <li>2. Hold your phone over a photo in the book.</li>
         <li>3. The photo will start playing.</li>
       </ol>
@@ -74,7 +74,7 @@ export default async function BookLanding({
         href={`/b/${book.id}/scan`}
         className="bg-primary text-primary-foreground mx-auto w-full max-w-xs rounded-full px-8 py-4 text-lg font-medium"
       >
-        Start
+        Scan to play
       </Link>
 
       <p className="text-muted-foreground text-xs">

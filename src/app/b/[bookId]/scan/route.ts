@@ -139,7 +139,7 @@ export async function GET(
 </head>
 <body>
 ${debug ? '<div id="dbg">booting</div>' : ''}
-<button id="start">Start</button>
+<button id="start">Scan to play</button>
 <button id="unmute" hidden>Tap for sound</button>
 <p id="hint" hidden>Hold your phone over a photo</p>
 
