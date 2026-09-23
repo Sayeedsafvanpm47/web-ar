@@ -94,14 +94,30 @@ export async function signUpload(
   );
 }
 
-/** Presigned GET for playback. Short-lived by design — do not cache it. */
-export async function signDownload(key: string): Promise<string> {
+/**
+ * Presigned GET for playback. Short-lived by design — do not cache it.
+ *
+ * `expiresIn` exists for the scanner: a customer may keep a scanning session
+ * open far longer than an admin thumbnail needs to live, and a URL that dies
+ * mid-session means a video that silently refuses to play. Still measured in
+ * minutes, never hours-long or permanent.
+ */
+export async function signDownload(
+  key: string,
+  expiresIn?: number,
+): Promise<string> {
   assertServer();
   return getSignedUrl(
     client(),
     new GetObjectCommand({ Bucket: bucket(), Key: key }),
-    { expiresIn: ttl() },
+    { expiresIn: expiresIn ?? ttl() },
   );
+}
+
+/** How long a scanning session's media URLs stay valid. */
+export function scanTtl(): number {
+  const raw = Number(process.env.R2_SCAN_URL_TTL_SECONDS ?? '1800');
+  return Number.isFinite(raw) && raw > 0 ? raw : 1800;
 }
 
 export async function deleteObject(key: string): Promise<void> {

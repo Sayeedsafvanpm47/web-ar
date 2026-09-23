@@ -123,8 +123,16 @@ export default async function BookDetailPage({
             help.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-2">
           <code className="text-xs break-all">/b/{book.id}</code>
+          <div className="flex gap-3 text-xs">
+            <Link href={`/b/${book.id}`} className="underline">
+              Open as a customer
+            </Link>
+            <Link href={`/b/${book.id}/scan?debug=1`} className="underline">
+              Scanner with debug readout
+            </Link>
+          </div>
         </CardContent>
       </Card>
 
@@ -167,12 +175,20 @@ export default async function BookDetailPage({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Still to come</CardTitle>
+          <CardTitle className="text-base">Compile targets</CardTitle>
+          <CardDescription>
+            The scanner matches against a compiled targets.mind file. Rebuild it
+            after adding, removing or reordering any photo — otherwise the file
+            and the database disagree about which video belongs to which photo.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="text-muted-foreground space-y-1 text-sm">
-          <p>Compiling targets.mind from these photos, with trackability scores.</p>
-          <p>QR and print file generation.</p>
-          <p>The public /b/{'{bookId}'} page and the scanner.</p>
+        <CardContent>
+          <Link
+            href={`/admin/books/${book.id}/compile`}
+            className="text-sm underline"
+          >
+            Go to compiler →
+          </Link>
         </CardContent>
       </Card>
     </main>

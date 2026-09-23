@@ -52,6 +52,26 @@ truth over any recollection. Do not delete it.
 - mind-ar **1.2.5** — `https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js`
   Newest npm release (2024-01-16). Plain IIFE bundle, loads as a classic script.
 
+## The two bundles are NOT the same kind of script (verified 2026-09-23)
+- **Scanner**: `mindar-image-aframe.prod.js` (1.7MB) is a self-contained
+  classic IIFE. Load with a plain `<script src>`.
+- **Compiler**: `mindar-image.prod.js` is only 266 bytes and is an **ES
+  module** — it `import`s a sibling chunk (`controller-*.js`) and then assigns
+  `window.MINDAR.IMAGE = {Controller, Compiler, UI}`. It MUST be loaded as
+  `<script type="module">`, and from a URL whose sibling chunk resolves (the
+  jsDelivr dist path does). Loading it as a classic script fails silently and
+  leaves `window.MINDAR` undefined.
+
+Compiler API, from the docs page source:
+```js
+const compiler = new window.MINDAR.IMAGE.Compiler();
+const dataList = await compiler.compileImageTargets(images, (pct) => {});
+const buffer   = await compiler.exportData();   // the .mind file bytes
+// dataList[i].targetImage.{width,height}
+// dataList[i].matchingData[scale].maximaPoints / .minimaPoints
+```
+`images` are HTMLImageElements. Compile order IS target index.
+
 ## Gotchas that cost real debugging time
 1. **`vr-mode-ui` does not exist in A-Frame 1.5.0** — it was renamed to
    **`xr-mode-ui`**. MindAR's own examples still use the old name because they
