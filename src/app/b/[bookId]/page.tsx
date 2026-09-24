@@ -43,6 +43,10 @@ export default async function BookLanding({
         heading: 'This book is not ready yet',
         body: 'We are still preparing the videos for this book. Please try again shortly.',
       },
+      unavailable: {
+        heading: 'Something went wrong at our end',
+        body: 'This is our problem, not yours, and your videos are safe. Please try again in a few minutes.',
+      },
     }[result.status];
 
     return (

@@ -18,9 +18,28 @@ import { NextResponse, type NextRequest } from 'next/server';
 export async function proxy(request: NextRequest) {
   const response = NextResponse.next({ request });
 
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  // Without configuration, createServerClient() throws — and because this
+  // runs on every request, that turns a missing environment variable into a
+  // blank 500 on every page, including ones that need no auth at all.
+  //
+  // Pass through instead. This is safe precisely because the proxy is not the
+  // security boundary: requireStaff() gates each admin page and server action,
+  // and RLS gates the database. Those fail closed and say what is wrong.
+  if (!url || !anonKey) {
+    console.error(
+      'proxy: NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY are ' +
+        'not set. Skipping session refresh. Set them in the hosting ' +
+        'environment — see DEPLOY.md.',
+    );
+    return response;
+  }
+
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    url,
+    anonKey,
     {
       cookies: {
         getAll() {

@@ -39,7 +39,8 @@ export type LookupResult =
   | { status: 'not-found' }
   | { status: 'revoked' }
   | { status: 'expired' }
-  | { status: 'not-ready' };
+  | { status: 'not-ready' }
+  | { status: 'unavailable' };
 
 /**
  * Nothing here returns customer PII. The landing page is reachable by anyone
@@ -52,6 +53,17 @@ export async function lookupPublicBook(bookId: string): Promise<LookupResult> {
   }
   if (!UUID_RE.test(bookId)) return { status: 'not-found' };
 
+  try {
+    return await load(bookId);
+  } catch (err) {
+    // Misconfiguration or an outage. Customers must never see a stack trace
+    // or a blank 500, but this still has to be loud for whoever is on call.
+    console.error('lookupPublicBook failed', err);
+    return { status: 'unavailable' };
+  }
+}
+
+async function load(bookId: string): Promise<LookupResult> {
   const supabase = createAdminClient();
 
   const { data: book } = await supabase

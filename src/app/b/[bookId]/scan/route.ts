@@ -79,8 +79,11 @@ export async function GET(
       revoked: ['This book has been disabled', 'Please contact us and we will sort it out.'],
       expired: ['This book’s hosting has ended', 'Get in touch to renew and we will bring the videos back.'],
       'not-ready': ['This book is not ready yet', 'We are still preparing the videos. Please try again shortly.'],
+      unavailable: ['Something went wrong at our end', 'This is our problem, not yours, and your videos are safe. Please try again in a few minutes.'],
     }[result.status];
-    return messagePage(copy[0], copy[1], result.status === 'not-found' ? 404 : 410);
+    const status =
+      result.status === 'not-found' ? 404 : result.status === 'unavailable' ? 503 : 410;
+    return messagePage(copy[0], copy[1], status);
   }
 
   const { book } = result;
