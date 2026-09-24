@@ -244,3 +244,60 @@ export async function deleteMemory(
   revalidatePath(`/admin/books/${bookId}`);
   return { ok: true };
 }
+
+/**
+ * Renews or clears a hosting term.
+ *
+ * Blank means no term, which denies public access — public.book_is_live()
+ * treats a null expiry as closed so a half-set-up book is never viewable.
+ */
+export async function setExpiry(
+  bookId: string,
+  expiryDate: string,
+): Promise<{ ok: boolean; error?: string }> {
+  await requireStaff();
+
+  const value = expiryDate.trim();
+  if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return { ok: false, error: 'Date must be yyyy-mm-dd.' };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from('books')
+    .update({ expiry_date: value || null })
+    .eq('id', bookId);
+
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/admin/books/${bookId}`);
+  return { ok: true };
+}
+
+/**
+ * The kill switch for a leaked QR code, and its reverse.
+ *
+ * Revoking takes effect on the next public request. It cannot be undone by
+ * reprinting: the id in the printed code IS the credential, so a genuinely
+ * leaked book needs a new id, not a new print of the same one.
+ */
+export async function setRevoked(
+  bookId: string,
+  revoked: boolean,
+): Promise<{ ok: boolean; error?: string }> {
+  await requireStaff();
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from('books')
+    .update({
+      revoked_at: revoked ? new Date().toISOString() : null,
+      revoked_reason: revoked ? 'Revoked from admin' : null,
+    })
+    .eq('id', bookId);
+
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/admin/books/${bookId}`);
+  return { ok: true };
+}

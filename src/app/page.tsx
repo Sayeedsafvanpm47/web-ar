@@ -1,7 +1,7 @@
 import Link from 'next/link';
 
 export const metadata = {
-  title: 'Black Pearl Living Memories',
+  title: 'Living Memories',
   description: 'Printed photo books that play your videos.',
 };
 
@@ -14,29 +14,42 @@ export const metadata = {
  */
 export default function Home() {
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-6 p-8 text-center">
-      <div className="space-y-2">
-        <p className="text-muted-foreground text-xs tracking-widest uppercase">
-          Black Pearl
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-8 py-12">
+      <header>
+        <p className="bp-eyebrow text-grey-4">Black Pearl</p>
+      </header>
+
+      <div className="flex flex-1 flex-col justify-center py-16">
+        <h1 className="font-display text-[2.75rem] leading-[1.02] tracking-tight">
+          Living Memories
+        </h1>
+        <p className="text-grey-3 mt-5 text-sm leading-relaxed">
+          Printed photo books that play your videos. Scan the QR code inside
+          your book to watch them.
         </p>
-        <h1 className="text-2xl font-semibold">Living Memories</h1>
+
+        <div className="bg-grey-5 mt-10 h-px w-full" />
+
+        <p className="text-grey-4 mt-6 text-xs leading-relaxed">
+          Books open only from their own printed link. There is nothing to
+          browse here.
+        </p>
       </div>
 
-      <p className="text-muted-foreground text-sm">
-        Printed photo books that play your videos. Scan the QR code inside your
-        book to watch them.
-      </p>
-
-      <p className="text-muted-foreground text-xs">
-        Books open only from their own link. There is nothing to browse here.
-      </p>
-
-      <Link
-        href="/admin"
-        className="text-muted-foreground mx-auto text-xs underline"
-      >
-        Staff sign in
-      </Link>
+      <footer className="flex items-center justify-between">
+        <a
+          href="https://www.blackpearlqa.com"
+          className="bp-eyebrow text-grey-4 hover:text-ink transition-colors"
+        >
+          blackpearlqa.com
+        </a>
+        <Link
+          href="/admin"
+          className="bp-eyebrow text-grey-4 hover:text-ink transition-colors"
+        >
+          Staff
+        </Link>
+      </footer>
     </main>
   );
 }

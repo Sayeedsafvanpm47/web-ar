@@ -23,6 +23,7 @@ import { createClient } from '@/lib/supabase/server';
 
 import { MemoryRow, type MemoryView } from './memory-row';
 import { MemoryUploader } from './memory-uploader';
+import { SettingsForm } from './settings-form';
 
 type BookDetail = {
   id: string;
@@ -133,6 +134,19 @@ export default async function BookDetailPage({
               Scanner with debug readout
             </Link>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Hosting and access</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SettingsForm
+            bookId={book.id}
+            expiryDate={book.expiry_date}
+            revokedAt={book.revoked_at}
+          />
         </CardContent>
       </Card>
 
