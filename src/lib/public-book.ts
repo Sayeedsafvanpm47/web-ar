@@ -15,6 +15,7 @@
  * revoked, and inside its paid hosting term.
  */
 import { createAdminClient } from '@/lib/supabase/admin';
+import { todayISO } from '@/lib/dates';
 import { mindKey, scanTtl, signDownload } from '@/lib/r2';
 
 const UUID_RE =
@@ -76,7 +77,9 @@ async function load(bookId: string): Promise<LookupResult> {
   if (book.revoked_at) return { status: 'revoked' };
 
   // Null expiry fails closed — a book with no term set is not public.
-  const today = new Date().toISOString().slice(0, 10);
+  // todayISO() is Doha time, matching what staff see in admin, so the two
+  // never disagree about whether a book is still in term.
+  const today = todayISO();
   if (!book.expiry_date || (book.expiry_date as string) < today) {
     return { status: 'expired' };
   }
