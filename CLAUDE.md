@@ -117,3 +117,60 @@ and verifiable.
 - https://hiukim.github.io/mind-ar-js-doc/installation/
 - https://hiukim.github.io/mind-ar-js-doc/tools/compile/
 - https://github.com/hiukim/mind-ar-js/blob/master/src/image-target/aframe.js
+
+---
+
+## Product: Blackpearl Live Photo Book
+
+This repo is the digital half of a product sold by Blackpearl Studio & Printing
+(Doha Mall, Abu Hamour, Doha) at https://www.blackpearlqa.com/store as the
+"Live photo book" (from QAR 450). A customer buys a printed hardback book;
+each page is linked to a short video. Scanning the page with a phone plays
+the video over the printed photo.
+
+The marketing site (blackpearlqa.com) is a SEPARATE codebase. This repo is
+only: the customer viewer (/b/...) and the staff admin (/admin). Do not
+build marketing pages, a store, checkout or payments here.
+
+### Naming (customer-facing)
+- Product name: "Live photo book". Brand: "Blackpearl" (one word).
+- Never show "Living Memories", "WebAR", "MindAR", "target", "UUID",
+  "Supabase", "R2" or any error code to a customer.
+- "Black Pearl Living Memories" may stay as the internal repo/package name.
+
+### PRODUCT DECISIONS (owner fills these in; TODO = placeholder, never guess)
+- Viewer domain: TODO (e.g. live.blackpearlqa.com)
+- Hosting term included with a book: TODO years. After expiry the book
+  shows the expired state; videos are NOT deleted automatically.
+- Max video length per page: TODO seconds
+- Languages: English + Arabic (RTL), matching blackpearlqa.com/ar
+
+### Brand system — match blackpearlqa.com exactly
+- Strictly monochrome. Tokens only:
+  ink #0A0A0A, paper #FAFAF8, greys #1A1A1A #2E2E2E #6B6B6B #A3A3A3
+  #D9D9D9 #EFEFEF. No accent colour, no gradients, no colour on hover.
+  States are shown by inversion, underline, weight or scale.
+- Type: Fraunces (display, large, tight leading, used sparingly) and
+  Archivo (body/UI). Self-hosted via next/font. Arabic: pick one Arabic
+  face that pairs with Archivo and use it only under dir="rtl".
+- Utility voice for labels and meta: uppercase, tracked, short
+  ("STEP 01 — SCAN", "COLLECT FROM DOHA MALL").
+- Photographs presented like contact-sheet frames with small captions.
+- shadcn/ui is allowed for admin. In the customer viewer, restyle any
+  shadcn primitive to these tokens so it does not look like shadcn.
+- Customer screens: entry/landing on paper (#FAFAF8). Scanner and video
+  on ink (#0A0A0A). The switch to dark is the moment the book "opens",
+  not a theme toggle.
+
+### Customer support path
+- Every customer error/empty state offers one action: WhatsApp
+  Blackpearl (https://wa.me/97431123552) with a prefilled message that
+  includes the book's short reference — never the full bookId.
+
+### Fallbacks that are part of the product, not extras
+- Each printed page carries a small QR to /b/[bookId]/m/[memoryId] that
+  plays that page's video without AR. AR failing must never mean the
+  customer cannot watch their video.
+- iOS blocks autoplay with sound. The first video per visit needs a tap
+  to unmute. Design for it; do not try to bypass it.
+- Customers can download their own videos (signed, short-lived URLs).
