@@ -126,5 +126,3 @@ export async function deleteObject(key: string): Promise<void> {
     new DeleteObjectCommand({ Bucket: bucket(), Key: key }),
   );
 }
-
-export const signedUrlTtlSeconds = ttl;

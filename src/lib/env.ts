@@ -42,16 +42,19 @@ export function publicEnv() {
   } as const;
 }
 
-/** Never reference from a client component. Throws if evaluated in a browser. */
+/**
+ * Never reference from a client component. Throws if evaluated in a browser.
+ *
+ * Signed-URL TTLs deliberately live in src/lib/r2.ts rather than here: that is
+ * the only module that mints a signed URL, and having a second copy of the
+ * setting invites the two drifting apart.
+ */
 export function serverEnv() {
   assertServer('serverEnv');
   return {
     supabaseServiceRoleKey: required(
       'SUPABASE_SERVICE_ROLE_KEY',
       process.env.SUPABASE_SERVICE_ROLE_KEY,
-    ),
-    signedUrlTtlSeconds: Number(
-      process.env.R2_SIGNED_URL_TTL_SECONDS ?? '300',
     ),
   } as const;
 }
