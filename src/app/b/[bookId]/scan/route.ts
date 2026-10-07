@@ -254,7 +254,7 @@ export async function GET(
   const videoTags = ordered
     .map(
       (m) =>
-        `  <video id="v${m.targetIndex}" src="${escapeHtml(m.videoUrl)}" preload="auto" loop muted playsinline webkit-playsinline crossorigin="anonymous"></video>`,
+        `  <video id="v${m.targetIndex}" src="${escapeHtml(m.videoUrl)}" preload="metadata" loop muted playsinline webkit-playsinline crossorigin="anonymous"></video>`,
     )
     .join('\n');
 
