@@ -226,15 +226,23 @@ export async function GET(
   const result = await lookupPublicBook(bookId);
 
   if (result.status !== 'ok') {
+    // A revoked book and an id that was never real must be indistinguishable
+    // from outside — same body, same status. Otherwise the response itself
+    // confirms that a given id exists, which is the one thing the id is
+    // supposed to keep secret.
     const copy = {
       'not-found': ['We couldn’t find this book', 'Check the link, or scan the code again.'],
-      revoked: ['This book has been disabled', 'Please contact us and we’ll sort it out.'],
+      revoked: ['We couldn’t find this book', 'Check the link, or scan the code again.'],
       expired: ['This book’s hosting has ended', 'Get in touch to renew and we’ll bring the videos back.'],
       'not-ready': ['This book isn’t ready yet', 'We’re still preparing the videos. Please try again shortly.'],
       unavailable: ['Something went wrong at our end', 'This is our problem, not yours, and your videos are safe. Please try again in a few minutes.'],
     }[result.status];
     const status =
-      result.status === 'not-found' ? 404 : result.status === 'unavailable' ? 503 : 410;
+      result.status === 'unavailable'
+        ? 503
+        : result.status === 'expired' || result.status === 'not-ready'
+          ? 410
+          : 404;
     return messagePage(copy[0], copy[1], status);
   }
 

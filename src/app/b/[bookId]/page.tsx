@@ -31,9 +31,12 @@ export default async function BookLanding({
         heading: 'We couldn’t find this book',
         body: 'Check the link, or scan the code again. If it still doesn’t work, get in touch and we’ll help.',
       },
+      // Identical to 'not-found' on purpose — see the note in scan/route.ts.
+      // The customer whose book was revoked learns nothing from this page, but
+      // they are the one person who can simply ask us.
       revoked: {
-        heading: 'This book has been disabled',
-        body: 'Access to this book was turned off. Please contact us and we’ll sort it out.',
+        heading: 'We couldn’t find this book',
+        body: 'Check the link, or scan the code again. If it still doesn’t work, get in touch and we’ll help.',
       },
       expired: {
         heading: 'This book’s hosting has ended',
