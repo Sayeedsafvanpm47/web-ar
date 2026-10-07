@@ -137,3 +137,54 @@ begin
   raise notice 'policy behaviour: all assertions passed';
 end
 $test$;
+
+-- ------------------------------------------------- book reference checks --
+do $ref$
+declare
+  a text;
+  b text;
+  n int;
+begin
+  -- Assigned automatically on insert.
+  select reference into a from public.books
+   where id = '44444444-4444-4444-8444-444444444444';
+  if a is null then raise exception 'FAIL: no reference assigned on insert'; end if;
+  if a !~ '^BP-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$' then
+    raise exception 'FAIL: reference % does not match the expected format', a;
+  end if;
+
+  -- Ambiguous glyphs must never appear.
+  if a ~ '[01IO]' then
+    raise exception 'FAIL: reference % contains an ambiguous character', a;
+  end if;
+
+  -- A second book gets a different one.
+  insert into public.books (id, customer_id, title, expiry_date)
+  values ('55555555-5555-4555-8555-555555555555',
+          '33333333-3333-4333-8333-333333333333',
+          'Second book', current_date + 30);
+  select reference into b from public.books
+   where id = '55555555-5555-4555-8555-555555555555';
+  if b is null or b = a then
+    raise exception 'FAIL: second book reference was % against first %', b, a;
+  end if;
+
+  -- Uniqueness is enforced, not merely hoped for.
+  begin
+    update public.books set reference = a
+     where id = '55555555-5555-4555-8555-555555555555';
+    raise exception 'FAIL: duplicate reference was accepted';
+  exception
+    when unique_violation then null;  -- expected
+  end;
+
+  -- The reference is NOT a credential: it must not be usable to find a book
+  -- by anon, same as every other column.
+  set local role anon;
+  select count(*) into n from public.books where reference = a;
+  if n <> 0 then raise exception 'FAIL: anon resolved a book by reference'; end if;
+  reset role;
+
+  raise notice 'book reference: all assertions passed';
+end
+$ref$;
