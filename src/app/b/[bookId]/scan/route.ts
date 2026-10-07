@@ -357,6 +357,11 @@ const reticle = document.querySelector('#reticle');
 const vignette = document.querySelector('#vignette');
 
 let current = -1, startedAt = 0, ttfd = null, losses = 0, state = 'idle', lastErr = '';
+let started = false;
+
+// MindAR throws if stopped before it was started, and a failed teardown must
+// never be what stops the rest of the teardown running.
+const safe = (label, fn) => { try { fn(); } catch (err) { console.warn(label, err); } };
 
 const show = el => el && el.classList.remove('is-hidden');
 const hide = el => el && el.classList.add('is-hidden');
@@ -441,6 +446,7 @@ startBtn.addEventListener('click', () => {
     const ar = getAR();
     if (!ar) throw new Error('mindar system not registered');
     ar.start();
+    started = true;
     intro.hidden = true;
     unmuteBtn.hidden = false;
   } catch (err) {
@@ -458,6 +464,40 @@ unmuteBtn.addEventListener('click', () => {
   if (current >= 0) videos[current].play().catch(() => {});
   unmuteBtn.hidden = true;
   draw();
+});
+
+// Leaving the page has to release the camera. Without this the getUserMedia
+// tracks stay live after a back navigation or a closed tab: the camera
+// indicator stays lit and MindAR keeps processing frames for a page the
+// customer believes they have left.
+//
+// arSystem.stop() is what actually ends it — it stops every track, removes the
+// video element and disposes the controller.
+function releaseCamera() {
+  if (!started) return;
+  started = false;
+  pauseTimers.forEach(t => { if (t) clearTimeout(t); });
+  videos.forEach(v => safe('video.pause', () => v.pause()));
+  safe('ar.stop', () => getAR().stop());
+  state = 'stopped';
+  draw();
+}
+
+window.addEventListener('pagehide', releaseCamera);
+
+// Backgrounding is different from leaving: stop burning CPU and battery, but
+// keep the session so returning to the tab resumes instead of demanding
+// another tap and another camera prompt.
+document.addEventListener('visibilitychange', () => {
+  if (!started) return;
+  const ar = getAR();
+  if (!ar) return;
+  if (document.hidden) {
+    videos.forEach(v => safe('video.pause', () => v.pause()));
+    safe('ar.pause', () => ar.pause());
+  } else {
+    safe('ar.unpause', () => ar.unpause());
+  }
 });
 
 if (DEBUG) setInterval(draw, 500);
