@@ -77,6 +77,22 @@ type Dictionary = {
     unavailable: { heading: string; body: string };
   };
 
+  scanner: {
+    intro: string;
+    start: string;
+    permissionNote: string;
+    starting: string;
+    scanning: string;
+    tapForSound: string;
+    deniedHeading: string;
+    deniedBody: string;
+    deniedIos: string;
+    deniedAndroid: string;
+    unavailableHeading: string;
+    unavailableBody: string;
+    watchWithoutCamera: string;
+  };
+
   player: {
     back: string;
     page: (n: number) => string;
@@ -145,6 +161,26 @@ const en: Dictionary = {
       heading: 'Something went wrong at our end',
       body: 'This is our problem, not yours, and your videos are safe. Please try again in a few minutes.',
     },
+  },
+
+  scanner: {
+    intro: 'Hold your phone over a photo in your book and it starts playing.',
+    start: 'Scan to play',
+    permissionNote: 'We’ll ask for camera access next.',
+    starting: 'Starting…',
+    scanning: 'Hold over a photo',
+    tapForSound: 'Tap for sound',
+    deniedHeading: 'The camera is blocked',
+    deniedBody:
+      'Your phone isn’t letting this page use the camera. You can turn it back on, or watch your videos without it.',
+    deniedIos:
+      'iPhone: tap “aA” in the address bar, choose Website Settings, set Camera to Allow, then reload.',
+    deniedAndroid:
+      'Android: tap the lock icon in the address bar, choose Permissions, turn Camera on, then reload.',
+    unavailableHeading: 'The camera didn’t start',
+    unavailableBody:
+      'This can happen in apps that open links in their own browser. Try opening this link in Safari or Chrome, or watch without the camera.',
+    watchWithoutCamera: 'Watch without the camera',
   },
 
   player: {
@@ -216,6 +252,26 @@ const ar: Dictionary = {
       heading: 'حدث خطأ لدينا',
       body: 'هذه مشكلتنا وليست مشكلتك، ومقاطعك بأمان. يرجى المحاولة بعد بضع دقائق.',
     },
+  },
+
+  scanner: {
+    intro: 'وجّه هاتفك نحو صورة في الألبوم وسيبدأ تشغيلها.',
+    start: 'امسح للتشغيل',
+    permissionNote: 'سنطلب إذن استخدام الكاميرا بعد ذلك.',
+    starting: 'جارٍ البدء…',
+    scanning: 'وجّه الكاميرا نحو صورة',
+    tapForSound: 'اضغط للصوت',
+    deniedHeading: 'الكاميرا محظورة',
+    deniedBody:
+      'هاتفك لا يسمح لهذه الصفحة باستخدام الكاميرا. يمكنك تفعيلها من جديد، أو مشاهدة مقاطعك بدونها.',
+    deniedIos:
+      'آيفون: اضغط على «aA» في شريط العنوان، ثم إعدادات الموقع، واضبط الكاميرا على السماح، ثم أعد التحميل.',
+    deniedAndroid:
+      'أندرويد: اضغط على رمز القفل في شريط العنوان، ثم الأذونات، وفعّل الكاميرا، ثم أعد التحميل.',
+    unavailableHeading: 'لم تبدأ الكاميرا',
+    unavailableBody:
+      'قد يحدث هذا في التطبيقات التي تفتح الروابط في متصفحها الخاص. جرّب فتح الرابط في سفاري أو كروم، أو شاهد بدون الكاميرا.',
+    watchWithoutCamera: 'المشاهدة بدون الكاميرا',
   },
 
   player: {

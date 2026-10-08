@@ -1,26 +1,39 @@
 /**
- * The MindAR scanner.
+ * The scanner.
  *
  * This is a Route Handler returning a complete HTML document, not a React
  * page, and that is deliberate. CLAUDE.md requires the scanner to be
- * self-contained and not rewritten from memory. The markup below is a direct
+ * self-contained and not rewritten from memory. The scene below is a direct
  * port of reference/scanner-spike/index.html, which was validated on a real
- * phone against a real three-target .mind file.
+ * phone against a real three-target target file.
  *
  * Keeping it outside React means A-Frame owns its DOM completely: no
  * re-render can tear down the scene, no hydration can race the two CDN
  * scripts, and the proven initialisation order is preserved exactly.
  *
- * Every non-obvious line here is load-bearing. Before changing anything, read
- * the "Verified MindAR facts" section of CLAUDE.md:
+ * ---------------------------------------------------------------------------
+ * THE CORE IS FROZEN. Do not change, without an entry in SCANNER-CHANGES.md:
+ *   - the two CDN script tags and their versions
+ *   - the <a-scene mindar-image="..."> attribute
+ *   - the <a-camera> entity
+ *   - the <a-entity mindar-image-target> / <a-video> geometry
+ *   - target index order
+ *   - the targetFound / targetLost / arReady / arError wiring
+ *
+ * Everything else in this file is the UI layer and is free to change.
+ *
+ * Before touching any of it, read "Verified MindAR facts" in CLAUDE.md:
  *   - A-Frame 1.5.0 uses `xr-mode-ui`, not `vr-mode-ui`
  *   - the mindar system must be looked up lazily, not at parse time
  *   - videos must NOT go in <a-assets>
  *   - autoStart:false plus a user-gesture Start button
  *   - plane width stays 1; only height varies, set to the PHOTO's aspect
+ * ---------------------------------------------------------------------------
  */
+import { headers } from 'next/headers';
 import { type NextRequest } from 'next/server';
 
+import { getDictionary, dir, resolveLocale, supportLink, type Locale } from '@/lib/i18n';
 import { lookupPublicBook } from '@/lib/public-book';
 
 /**
@@ -37,8 +50,7 @@ import { lookupPublicBook } from '@/lib/public-book';
  *
  * missTolerance is the number of consecutive undetected frames before the
  * target counts as lost. The default 5 makes the video blink out whenever a
- * hand or a glare crosses the page; doubling it rides through that. The cost
- * is that a genuinely removed photo holds its last pose a few frames longer.
+ * hand or a glare crosses the page; doubling it rides through that.
  *
  * warmupTolerance stays at its default. Lowering it would speed up first
  * detection but risk latching onto the wrong photo, and showing one family
@@ -53,6 +65,15 @@ const TRACKING_DEFAULTS = {
   missTolerance: 10,
   warmupTolerance: 5,
 } as const;
+
+/**
+ * How long a video keeps playing after its photo leaves frame.
+ *
+ * Vanishing the instant tracking drops makes a deliberate page turn feel like
+ * a crash and a passing glare feel like a bug. The video carries on in a card
+ * for a few seconds instead, and returning to the photo picks up where it was.
+ */
+const LOST_CARD_MS = 4500;
 
 /** Prevents a value breaking out of the <script> block it is embedded in. */
 function embedJson(value: unknown): string {
@@ -84,12 +105,14 @@ function numParam(
 
 const FONT_LINKS = `<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400&family=Archivo:wght@400;500&display=swap" rel="stylesheet">`;
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400&family=Archivo:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@400;500&display=swap" rel="stylesheet">`;
 
 const BRAND_CSS = `
   :root {
     --ink: #0A0A0A;
     --paper: #FAFAF8;
+    --grey-1: #1A1A1A;
+    --grey-3: #6B6B6B;
     --grey-4: #A3A3A3;
   }
   * { box-sizing: border-box; }
@@ -100,33 +123,50 @@ const BRAND_CSS = `
     font-family: Archivo, system-ui, -apple-system, sans-serif;
     overscroll-behavior: none;
   }
+  body[dir="rtl"] { font-family: "IBM Plex Sans Arabic", Archivo, system-ui, sans-serif; }
+
   .eyebrow {
     font-size: 11px; font-weight: 500;
     text-transform: uppercase; letter-spacing: 0.12em;
   }
   #wrap { position: absolute; inset: 0; overflow: hidden; }
 
-  /* Full-bleed intro, shown until the customer taps. The camera is not
-     requested until then. */
-  #intro {
+  /* Full-bleed panels shown before, instead of, or after the camera. */
+  .panel {
     position: fixed; inset: 0; z-index: 10002;
     background: var(--ink); color: var(--paper);
     display: flex; flex-direction: column; justify-content: space-between;
-    padding: 48px 32px; text-align: center;
+    padding: max(2.5rem, env(safe-area-inset-top)) 2rem
+             max(2.5rem, env(safe-area-inset-bottom));
+    text-align: center;
+    overflow-y: auto;
   }
-  #intro h1 {
+  .panel h1 {
     font-family: Fraunces, Georgia, serif;
-    font-size: 34px; line-height: 1.1; letter-spacing: -0.02em;
+    font-size: 32px; line-height: 1.1; letter-spacing: -0.02em;
     font-weight: 400; margin: 0;
   }
-  #intro p { color: var(--grey-4); font-size: 13px; line-height: 1.6; margin: 12px 0 0; }
-  #start {
-    border: 0; border-radius: 999px;
-    background: var(--paper); color: var(--ink);
-    padding: 17px 32px; font: inherit; font-size: 16px; font-weight: 500;
-    width: 100%; cursor: pointer;
+  .panel p { color: var(--grey-4); font-size: 13px; line-height: 1.6; margin: 12px 0 0; }
+  .panel .how {
+    text-align: start; background: var(--grey-1); border-radius: 12px;
+    padding: 16px; margin-top: 20px;
   }
-  #start:disabled { opacity: 0.55; }
+  .panel .how p { margin: 0 0 10px; color: var(--paper); font-size: 13px; }
+  .panel .how p:last-child { margin-bottom: 0; }
+
+  .pill {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 48px; width: 100%; border: 0; border-radius: 999px;
+    background: var(--paper); color: var(--ink);
+    padding: 0 32px; font: inherit; font-size: 16px; font-weight: 500;
+    cursor: pointer; text-decoration: none;
+  }
+  .pill:disabled { opacity: 0.55; }
+  .quiet {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 48px; color: var(--grey-4); font-size: 14px;
+    text-decoration: underline; text-underline-offset: 3px;
+  }
 
   /* Scanning reticle: four corner brackets that breathe gently. */
   #reticle {
@@ -156,13 +196,11 @@ const BRAND_CSS = `
   }
 
   #unmute {
-    position: fixed; z-index: 10001; left: 50%; bottom: 40px;
-    transform: translateX(-50%);
-    border: 0; border-radius: 999px;
-    background: rgba(250, 250, 248, 0.94); color: var(--ink);
-    padding: 14px 26px; font: inherit; font-size: 14px; font-weight: 500;
+    position: fixed; z-index: 10001; left: 50%; bottom: max(2.5rem, env(safe-area-inset-bottom));
+    transform: translateX(-50%); width: auto; min-width: 180px;
+    background: rgba(250, 250, 248, 0.94);
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-    cursor: pointer; white-space: nowrap;
+    font-size: 14px; white-space: nowrap;
   }
 
   /* Thin vignette so the white UI stays readable over a bright page. */
@@ -170,6 +208,23 @@ const BRAND_CSS = `
     position: fixed; inset: 0; z-index: 9999; pointer-events: none;
     background: radial-gradient(ellipse at center,
       rgba(0,0,0,0) 45%, rgba(0,0,0,0.38) 100%);
+  }
+
+  /* Videos are normally offscreen texture sources only. When tracking drops,
+     the container becomes a card so the video keeps playing where the
+     customer can see it instead of vanishing. */
+  #vids { display: none; }
+  #vids.is-card {
+    display: block; position: fixed; z-index: 10001;
+    left: 16px; right: 16px; bottom: max(6rem, calc(env(safe-area-inset-bottom) + 6rem));
+    border-radius: 14px; overflow: hidden;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    animation: cardin 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  #vids.is-card video { width: 100%; height: auto; display: block; }
+  @keyframes cardin {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 
   #dbg {
@@ -197,9 +252,14 @@ function page(html: string, status = 200): Response {
   });
 }
 
-function messagePage(heading: string, body: string, status: number): Response {
+function messagePage(
+  locale: Locale,
+  heading: string,
+  body: string,
+  status: number,
+): Response {
   return page(
-    `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+    `<!DOCTYPE html><html lang="${locale}" dir="${dir(locale)}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Live photo book</title>
@@ -207,6 +267,7 @@ ${FONT_LINKS}
 <style>
 body{margin:0;background:#FAFAF8;color:#0A0A0A;display:grid;place-items:center;
 min-height:100dvh;font-family:Archivo,system-ui,sans-serif;text-align:center;padding:2rem}
+body[dir="rtl"]{font-family:"IBM Plex Sans Arabic",Archivo,system-ui,sans-serif}
 .eyebrow{font-size:11px;font-weight:500;text-transform:uppercase;
 letter-spacing:.12em;color:#A3A3A3;margin:0 0 20px}
 h1{font-family:Fraunces,Georgia,serif;font-weight:400;font-size:1.75rem;
@@ -222,7 +283,14 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ bookId: string }> },
 ) {
-  const { bookId } = await params;
+  const [{ bookId }, headerList] = await Promise.all([params, headers()]);
+  const query = request.nextUrl.searchParams;
+  const locale = resolveLocale(
+    query.get('lang'),
+    headerList.get('accept-language'),
+  );
+  const t = getDictionary(locale);
+
   // withMedia: this route embeds the target file and every video directly in
   // the document, so unlike the entry page it genuinely needs them signed.
   const result = await lookupPublicBook(bookId, { withMedia: true });
@@ -232,8 +300,9 @@ export async function GET(
   // so send the customer there rather than telling them it is broken.
   if (result.status === 'ok' && !result.book.scannable) {
     return messagePage(
-      'This book isn’t ready to scan yet',
-      'You can still watch every page without the camera — open the book link and choose "Watch without the camera".',
+      locale,
+      t.states.notReady.heading,
+      t.states.notReady.body,
       410,
     );
   }
@@ -244,23 +313,22 @@ export async function GET(
     // confirms that a given id exists, which is the one thing the id is
     // supposed to keep secret.
     const copy = {
-      'not-found': ['We couldn’t find this book', 'Check the link, or scan the code again.'],
-      revoked: ['We couldn’t find this book', 'Check the link, or scan the code again.'],
-      expired: ['This book’s hosting has ended', 'Get in touch to renew and we’ll bring the videos back.'],
-      empty: ['This book isn’t ready yet', 'We’re still preparing the videos. Please try again shortly.'],
-      unavailable: ['Something went wrong at our end', 'This is our problem, not yours, and your videos are safe. Please try again in a few minutes.'],
-    }[result.status] as [string, string];
+      'not-found': t.states.notFound,
+      revoked: t.states.notFound,
+      expired: t.states.expired,
+      empty: t.states.empty,
+      unavailable: t.states.unavailable,
+    }[result.status];
     const status =
       result.status === 'unavailable'
         ? 503
         : result.status === 'expired' || result.status === 'empty'
           ? 410
           : 404;
-    return messagePage(copy[0], copy[1], status);
+    return messagePage(locale, copy.heading, copy.body, status);
   }
 
   const { book } = result;
-  const query = request.nextUrl.searchParams;
   const debug = query.get('debug') === '1';
 
   const tracking = {
@@ -303,8 +371,11 @@ export async function GET(
   // instead of covering it, so a missing aspect is a data bug worth seeing.
   const aspects = ordered.map((m) => m.photoAspect ?? 0);
 
+  const pagesHref = `/b/${book.id}/pages?lang=${locale}`;
+  const whatsapp = supportLink(locale, book.reference);
+
   const html = `<!DOCTYPE html>
-<html lang="en">
+<html lang="${locale}" dir="${dir(locale)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
@@ -316,18 +387,34 @@ ${FONT_LINKS}
 <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
 <style>${BRAND_CSS}</style>
 </head>
-<body>
+<body dir="${dir(locale)}">
 ${debug ? '<div id="dbg">booting</div>' : ''}
 
-<div id="intro">
-  <p class="eyebrow" style="color: var(--grey-4)">Blackpearl · Live photo book</p>
+<div id="intro" class="panel">
+  <p class="eyebrow" style="color: var(--grey-4)">Blackpearl · ${escapeHtml(t.productName)}</p>
   <div>
     <h1>${escapeHtml(book.title)}</h1>
-    <p>Hold your phone over a photo in the book and it starts playing.</p>
+    <p>${escapeHtml(t.scanner.intro)}</p>
   </div>
   <div>
-    <button id="start">Scan to play</button>
-    <p style="margin-top:14px">We’ll ask for camera access next.</p>
+    <button id="start" class="pill">${escapeHtml(t.scanner.start)}</button>
+    <p>${escapeHtml(t.scanner.permissionNote)}</p>
+  </div>
+</div>
+
+<div id="denied" class="panel" hidden>
+  <p class="eyebrow" style="color: var(--grey-4)">Blackpearl</p>
+  <div>
+    <h1 id="denied-heading">${escapeHtml(t.scanner.deniedHeading)}</h1>
+    <p id="denied-body">${escapeHtml(t.scanner.deniedBody)}</p>
+    <div class="how" id="denied-how">
+      <p>${escapeHtml(t.scanner.deniedIos)}</p>
+      <p>${escapeHtml(t.scanner.deniedAndroid)}</p>
+    </div>
+  </div>
+  <div>
+    <a class="pill" href="${escapeHtml(pagesHref)}">${escapeHtml(t.scanner.watchWithoutCamera)}</a>
+    <p><a class="quiet" href="${escapeHtml(whatsapp)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.support.action)}</a></p>
   </div>
 </div>
 
@@ -337,11 +424,11 @@ ${debug ? '<div id="dbg">booting</div>' : ''}
   <span></span><span></span><span></span><span></span>
 </div>
 
-<p id="hint" class="eyebrow fade is-hidden">Hold over a photo</p>
+<p id="hint" class="eyebrow fade is-hidden">${escapeHtml(t.scanner.scanning)}</p>
 
-<button id="unmute" hidden>Tap for sound</button>
+<button id="unmute" class="pill" hidden>${escapeHtml(t.scanner.tapForSound)}</button>
 
-<div id="vids" style="display:none">
+<div id="vids">
 ${videoTags}
 </div>
 
@@ -361,6 +448,15 @@ ${targetEntities}
 <script>
 const ASPECT = ${embedJson(aspects)};
 const DEBUG = ${debug ? 'true' : 'false'};
+const LOST_CARD_MS = ${LOST_CARD_MS};
+const T = ${embedJson({
+    starting: t.scanner.starting,
+    start: t.scanner.start,
+    deniedHeading: t.scanner.deniedHeading,
+    deniedBody: t.scanner.deniedBody,
+    unavailableHeading: t.scanner.unavailableHeading,
+    unavailableBody: t.scanner.unavailableBody,
+  })};
 
 const scene = document.querySelector('a-scene');
 const getAR = () => scene.systems['mindar-image-system'];
@@ -368,14 +464,20 @@ const targets = [...document.querySelectorAll('.tgt')];
 const videos = targets.map((_, i) => document.querySelector('#v' + i));
 const dbg = document.querySelector('#dbg');
 const intro = document.querySelector('#intro');
+const denied = document.querySelector('#denied');
+const deniedHeading = document.querySelector('#denied-heading');
+const deniedBody = document.querySelector('#denied-body');
+const deniedHow = document.querySelector('#denied-how');
 const startBtn = document.querySelector('#start');
 const unmuteBtn = document.querySelector('#unmute');
 const hint = document.querySelector('#hint');
 const reticle = document.querySelector('#reticle');
 const vignette = document.querySelector('#vignette');
+const vids = document.querySelector('#vids');
 
 let current = -1, startedAt = 0, ttfd = null, losses = 0, state = 'idle', lastErr = '';
 let started = false;
+let cardTimer = null;
 
 // MindAR throws if stopped before it was started, and a failed teardown must
 // never be what stops the rest of the teardown running.
@@ -415,17 +517,32 @@ videos.forEach((v, i) => {
   v.readyState >= 1 ? fit() : v.addEventListener('loadedmetadata', fit);
 });
 
-// Pausing the instant tracking drops makes the video stutter every time a
-// hand or a glare crosses the page. Hold for a beat and cancel if the target
-// comes back, which it usually does.
-const PAUSE_GRACE_MS = 400;
-const pauseTimers = new Array(targets.length).fill(null);
+// ---------------------------------------------------------------- the card --
+// On losing a photo the video carries on in a card rather than vanishing, so a
+// glare or a deliberate page turn does not read as a crash.
+function showCard(i) {
+  videos.forEach((v, j) => { v.style.display = j === i ? 'block' : 'none'; });
+  vids.classList.add('is-card');
+}
 
+function hideCard() {
+  vids.classList.remove('is-card');
+  videos.forEach(v => { v.style.display = 'none'; });
+}
+
+function cancelCardTimer() {
+  if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; }
+}
+
+// --------------------------------------------------------- the frozen core --
 targets.forEach((t, i) => {
   t.addEventListener('targetFound', () => {
     current = i;
     if (ttfd === null && startedAt) { ttfd = Math.round(performance.now() - startedAt); }
-    if (pauseTimers[i]) { clearTimeout(pauseTimers[i]); pauseTimers[i] = null; }
+    cancelCardTimer();
+    hideCard();
+    // A different photo switches: whatever was playing stops.
+    videos.forEach((v, j) => { if (j !== i) safe('video.pause', () => v.pause()); });
     hide(reticle); hide(hint);
     t.querySelector('.scr').emit('settle');
     videos[i].play().catch(e => console.warn('play blocked', e));
@@ -435,8 +552,13 @@ targets.forEach((t, i) => {
     if (current === i) current = -1;
     losses++;
     show(reticle); show(hint);
-    if (pauseTimers[i]) clearTimeout(pauseTimers[i]);
-    pauseTimers[i] = setTimeout(() => { videos[i].pause(); pauseTimers[i] = null; }, PAUSE_GRACE_MS);
+    showCard(i);
+    cancelCardTimer();
+    cardTimer = setTimeout(() => {
+      safe('video.pause', () => videos[i].pause());
+      hideCard();
+      cardTimer = null;
+    }, LOST_CARD_MS);
     draw();
   });
 });
@@ -448,18 +570,67 @@ scene.addEventListener('arReady', () => {
 });
 scene.addEventListener('arError', e => {
   state = 'error: ' + (e.detail && e.detail.error);
-  intro.hidden = false;
-  startBtn.disabled = false;
-  startBtn.textContent = 'Camera unavailable';
+  showPanel(denied, T.unavailableHeading, T.unavailableBody, false);
   draw();
 });
+// ----------------------------------------------------- end of frozen core --
 
-startBtn.addEventListener('click', () => {
+function showPanel(el, heading, body, withHow) {
+  deniedHeading.textContent = heading;
+  deniedBody.textContent = body;
+  deniedHow.hidden = !withHow;
+  intro.hidden = true;
+  el.hidden = false;
+}
+
+/**
+ * Asks for the camera before MindAR does, purely so a refusal can be told
+ * apart from a failure. MindAR swallows the DOMException and reports only
+ * "VIDEO_FAIL", which is not enough to tell a customer what to do.
+ *
+ * The probe stream is stopped immediately. Permission persists for the origin,
+ * so MindAR's own getUserMedia reuses it without a second prompt.
+ */
+async function preflightCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return 'unavailable';
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: 'environment' },
+    });
+    stream.getTracks().forEach(track => track.stop());
+    return 'ok';
+  } catch (err) {
+    const name = err && err.name;
+    return (name === 'NotAllowedError' || name === 'SecurityError')
+      ? 'denied'
+      : 'unavailable';
+  }
+}
+
+startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
-  startBtn.textContent = 'Starting…';
+  startBtn.textContent = T.starting;
   state = 'starting camera';
   draw();
   startedAt = performance.now();
+
+  const probe = await preflightCamera();
+  if (probe === 'denied') {
+    state = 'denied';
+    showPanel(denied, T.deniedHeading, T.deniedBody, true);
+    draw();
+    return;
+  }
+  if (probe === 'unavailable') {
+    state = 'camera unavailable';
+    showPanel(denied, T.unavailableHeading, T.unavailableBody, false);
+    draw();
+    return;
+  }
+
   try {
     const ar = getAR();
     if (!ar) throw new Error('mindar system not registered');
@@ -470,8 +641,7 @@ startBtn.addEventListener('click', () => {
   } catch (err) {
     lastErr = err.message;
     state = 'start failed';
-    startBtn.disabled = false;
-    startBtn.textContent = 'Try again';
+    showPanel(denied, T.unavailableHeading, T.unavailableBody, false);
   }
   draw();
 });
@@ -494,7 +664,8 @@ unmuteBtn.addEventListener('click', () => {
 function releaseCamera() {
   if (!started) return;
   started = false;
-  pauseTimers.forEach(t => { if (t) clearTimeout(t); });
+  cancelCardTimer();
+  hideCard();
   videos.forEach(v => safe('video.pause', () => v.pause()));
   safe('ar.stop', () => getAR().stop());
   state = 'stopped';
@@ -502,6 +673,15 @@ function releaseCamera() {
 }
 
 window.addEventListener('pagehide', releaseCamera);
+
+// A page restored from the back/forward cache comes back with a scene that was
+// already torn down: the camera tracks are stopped and the controller is
+// disposed, but the DOM still looks live. MindAR offers no way to restart in
+// place, so reload rather than leaving the customer staring at a dead screen
+// with no obvious way out.
+window.addEventListener('pageshow', e => {
+  if (e.persisted) window.location.reload();
+});
 
 // Backgrounding is different from leaving: stop burning CPU and battery, but
 // keep the session so returning to the tab resumes instead of demanding
@@ -511,6 +691,7 @@ document.addEventListener('visibilitychange', () => {
   const ar = getAR();
   if (!ar) return;
   if (document.hidden) {
+    cancelCardTimer();
     videos.forEach(v => safe('video.pause', () => v.pause()));
     safe('ar.pause', () => ar.pause());
   } else {
