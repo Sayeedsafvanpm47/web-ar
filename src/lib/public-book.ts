@@ -16,6 +16,7 @@
  * reference and the media, and nothing about the person who bought it.
  */
 import { todayISO } from '@/lib/dates';
+import { isContiguousFromZero } from '@/lib/target-mapping';
 import { mindKey, photoKey, scanTtl, signDownload, videoKey } from '@/lib/r2';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -35,10 +36,8 @@ export type PublicMemory = {
   id: string;
   /** Position in the book, and in the compiled target file. Zero-based. */
   targetIndex: number;
-  /** Height / width of the printed photo. Drives the AR plane. */
+  /** Height / width of the printed photo. Drives the plane the video sits on. */
   photoAspect: number | null;
-  /** Only present when the caller asked for media. */
-  videoUrl: string | null;
 };
 
 export type PublicBook = {
@@ -80,11 +79,15 @@ export type LookupResult =
 
 type Options = {
   /**
-   * Sign a playable URL for every video. Off by default: the entry page never
-   * plays anything, and signing N videos it will not use costs a round trip
-   * per video and hands out credentials nobody asked for.
+   * Sign the compiled target file. Only the scanner needs it.
+   *
+   * Videos are deliberately never signed here any more. They are minted one
+   * at a time by /b/[bookId]/media/[memoryId], when a photo is actually found
+   * — a document carrying N signed URLs hands out N live credentials to
+   * anything that can read it, and they start expiring before the customer
+   * has pressed start.
    */
-  withMedia?: boolean;
+  withTargets?: boolean;
 };
 
 export async function lookupPublicBook(
@@ -173,7 +176,9 @@ async function load(bookId: string, options: Options): Promise<LookupResult> {
   // database disagree and every video after the gap would play on the wrong
   // photo. That makes the book unscannable — but not unwatchable, since the
   // per-page player addresses a memory by id and cannot mismatch.
-  const contiguous = memories.every((m, i) => m.target_index === i);
+  const contiguous = isContiguousFromZero(
+    memories.map((m) => ({ id: m.id as string, targetIndex: m.target_index as number })),
+  );
   const scannable = Boolean(book.mind_object_key) && contiguous;
 
   const ttl = scanTtl();
@@ -186,19 +191,14 @@ async function load(bookId: string, options: Options): Promise<LookupResult> {
       reference,
       scannable,
       mindUrl:
-        scannable && options.withMedia
+        scannable && options.withTargets
           ? await signDownload(mindKey(bookId), ttl)
           : null,
-      memories: await Promise.all(
-        memories.map(async (m) => ({
-          id: m.id as string,
-          targetIndex: m.target_index as number,
-          photoAspect: (m.photo_aspect as number | null) ?? null,
-          videoUrl: options.withMedia
-            ? await signDownload(m.video_object_key as string, ttl)
-            : null,
-        })),
-      ),
+      memories: memories.map((m) => ({
+        id: m.id as string,
+        targetIndex: m.target_index as number,
+        photoAspect: (m.photo_aspect as number | null) ?? null,
+      })),
     },
   };
 }

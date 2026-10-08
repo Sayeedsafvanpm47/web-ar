@@ -35,6 +35,7 @@ import { type NextRequest } from 'next/server';
 
 import { getDictionary, dir, resolveLocale, supportLink, type Locale } from '@/lib/i18n';
 import { lookupPublicBook } from '@/lib/public-book';
+import { orderByTargetIndex } from '@/lib/target-mapping';
 
 /**
  * Tracking stability.
@@ -291,9 +292,9 @@ export async function GET(
   );
   const t = getDictionary(locale);
 
-  // withMedia: this route embeds the target file and every video directly in
-  // the document, so unlike the entry page it genuinely needs them signed.
-  const result = await lookupPublicBook(bookId, { withMedia: true });
+  // Only the target file is signed here. Video URLs are fetched one at a time
+  // from /b/[bookId]/media/[memoryId] when a photo is actually found.
+  const result = await lookupPublicBook(bookId, { withTargets: true });
 
   // A book with no compiled target file, or whose page indexes no longer line
   // up with it, cannot be scanned — but it can still be watched page by page,
@@ -338,17 +339,18 @@ export async function GET(
     warmupTolerance: numParam(query, 'warmup', TRACKING_DEFAULTS.warmupTolerance),
   };
 
-  // scannable is true and withMedia was requested, so every URL below is
-  // present. The type allows null because other callers do not ask for media.
+  // scannable is true and withTargets was requested, so this is present. The
+  // type allows null because other callers do not ask for it.
   const mindUrl = book.mindUrl ?? '';
-  const ordered = [...book.memories]
-    .sort((a, b) => a.targetIndex - b.targetIndex)
-    .map((m) => ({ ...m, videoUrl: m.videoUrl ?? '' }));
+  const ordered = orderByTargetIndex(book.memories);
 
+  // No src attribute. The signed URL is fetched when the photo is actually
+  // found — see ensureSource() below — so the document carries no credentials
+  // and none of them start expiring while the customer reads the intro.
   const videoTags = ordered
     .map(
       (m) =>
-        `  <video id="v${m.targetIndex}" src="${escapeHtml(m.videoUrl)}" preload="metadata" loop muted playsinline webkit-playsinline crossorigin="anonymous"></video>`,
+        `  <video id="v${m.targetIndex}" data-memory="${escapeHtml(m.id)}" preload="none" loop muted playsinline webkit-playsinline crossorigin="anonymous"></video>`,
     )
     .join('\n');
 
@@ -413,6 +415,7 @@ ${debug ? '<div id="dbg">booting</div>' : ''}
     </div>
   </div>
   <div>
+    <button id="retry" class="pill" hidden style="margin-bottom:12px">${escapeHtml(t.player.retry)}</button>
     <a class="pill" href="${escapeHtml(pagesHref)}">${escapeHtml(t.scanner.watchWithoutCamera)}</a>
     <p><a class="quiet" href="${escapeHtml(whatsapp)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.support.action)}</a></p>
   </div>
@@ -449,6 +452,9 @@ ${targetEntities}
 const ASPECT = ${embedJson(aspects)};
 const DEBUG = ${debug ? 'true' : 'false'};
 const LOST_CARD_MS = ${LOST_CARD_MS};
+const MEDIA_BASE = ${embedJson(`/b/${book.id}/media/`)};
+const MEMORY_IDS = ${embedJson(ordered.map((m) => m.id))};
+const UNMUTE_KEY = 'bp-unmuted';
 const T = ${embedJson({
     starting: t.scanner.starting,
     start: t.scanner.start,
@@ -456,6 +462,8 @@ const T = ${embedJson({
     deniedBody: t.scanner.deniedBody,
     unavailableHeading: t.scanner.unavailableHeading,
     unavailableBody: t.scanner.unavailableBody,
+    cantLoadHeading: t.player.cantLoad,
+    cantLoadBody: t.states.unavailable.body,
   })};
 
 const scene = document.querySelector('a-scene');
@@ -469,6 +477,7 @@ const deniedHeading = document.querySelector('#denied-heading');
 const deniedBody = document.querySelector('#denied-body');
 const deniedHow = document.querySelector('#denied-how');
 const startBtn = document.querySelector('#start');
+const retryBtn = document.querySelector('#retry');
 const unmuteBtn = document.querySelector('#unmute');
 const hint = document.querySelector('#hint');
 const reticle = document.querySelector('#reticle');
@@ -478,6 +487,7 @@ const vids = document.querySelector('#vids');
 let current = -1, startedAt = 0, ttfd = null, losses = 0, state = 'idle', lastErr = '';
 let started = false;
 let cardTimer = null;
+let lastFailed = -1;
 
 // MindAR throws if stopped before it was started, and a failed teardown must
 // never be what stops the rest of the teardown running.
@@ -517,6 +527,105 @@ videos.forEach((v, i) => {
   v.readyState >= 1 ? fit() : v.addEventListener('loadedmetadata', fit);
 });
 
+// ------------------------------------------------------- lazy video source --
+// Nothing is fetched until a photo is actually found. One silent retry covers
+// an expired or dropped URL; a second failure is shown to the customer.
+const sources = new Array(videos.length).fill(null);
+
+async function fetchUrl(i) {
+  const res = await fetch(MEDIA_BASE + MEMORY_IDS[i], { cache: 'no-store' });
+  if (!res.ok) throw new Error('media ' + res.status);
+  const body = await res.json();
+  if (!body || !body.url) throw new Error('media: no url');
+  return body.url;
+}
+
+function whenReady(v) {
+  if (v.readyState >= 2) return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { v.removeEventListener('loadeddata', done); resolve(); };
+    v.addEventListener('loadeddata', done);
+    // Never hang forever on a stalled network — fall through and let play()
+    // report the real problem.
+    setTimeout(done, 8000);
+  });
+}
+
+async function ensureSource(i, { retry = true } = {}) {
+  const v = videos[i];
+  if (sources[i]) return;
+  try {
+    const url = await fetchUrl(i);
+    sources[i] = url;
+    v.src = url;
+    v.load();
+    await whenReady(v);
+    // The material was built from an empty element, so point it at the video
+    // again now that there are frames. Without this the plane can stay blank.
+    safe('material.refresh', () => {
+      targets[i].querySelector('.scr').setAttribute('material', 'src', '#v' + i);
+    });
+    coverFit(i);
+  } catch (err) {
+    sources[i] = null;
+    if (retry) {
+      console.warn('media fetch failed, retrying once', err);
+      await ensureSource(i, { retry: false });
+      return;
+    }
+    throw err;
+  }
+}
+
+// ------------------------------------------------------------- cover fit ----
+// The plane is sized to the PRINTED photo. A video shot at a different ratio
+// would otherwise be stretched to fit it. Cropping the texture instead gives
+// object-fit: cover — no stretching, no letterbox bars.
+function coverFit(i) {
+  const v = videos[i];
+  const el = targets[i].querySelector('.scr');
+  const mesh = el.getObject3D('mesh');
+  const tex = mesh && mesh.material && mesh.material.map;
+  if (!tex || !v.videoWidth || !v.videoHeight) return;
+
+  const planeAR = 1 / (ASPECT[i] || (v.videoHeight / v.videoWidth) || 1);
+  const videoAR = v.videoWidth / v.videoHeight;
+
+  if (videoAR > planeAR) {
+    const r = planeAR / videoAR;           // video is wider — crop the sides
+    tex.repeat.set(r, 1);
+    tex.offset.set((1 - r) / 2, 0);
+  } else {
+    const r = videoAR / planeAR;           // video is taller — crop top/bottom
+    tex.repeat.set(1, r);
+    tex.offset.set(0, (1 - r) / 2);
+  }
+  tex.needsUpdate = true;
+}
+
+// --------------------------------------------------------------- fade in ----
+// The plane starts transparent so the first frame is never a black rectangle
+// over the customer's photo. The printed photo shows through until there is
+// something real to put on top of it.
+function setPlaneOpacity(i, value) {
+  safe('plane.opacity', () => {
+    targets[i].querySelector('.scr')
+      .setAttribute('material', 'transparent: true; opacity: ' + value);
+  });
+}
+
+videos.forEach((_, i) => setPlaneOpacity(i, 0));
+
+function revealPlane(i) {
+  let o = 0;
+  const step = () => {
+    o = Math.min(1, o + 0.12);
+    setPlaneOpacity(i, o);
+    if (o < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 // ---------------------------------------------------------------- the card --
 // On losing a photo the video carries on in a card rather than vanishing, so a
 // glare or a deliberate page turn does not read as a crash.
@@ -545,7 +654,21 @@ targets.forEach((t, i) => {
     videos.forEach((v, j) => { if (j !== i) safe('video.pause', () => v.pause()); });
     hide(reticle); hide(hint);
     t.querySelector('.scr').emit('settle');
-    videos[i].play().catch(e => console.warn('play blocked', e));
+
+    ensureSource(i)
+      .then(() => {
+        // Still the current target? The customer may have moved on while the
+        // URL was in flight.
+        if (current !== i) return;
+        videos[i].muted = muted;
+        revealPlane(i);
+        return videos[i].play().catch(e => console.warn('play blocked', e));
+      })
+      .catch(err => {
+        console.warn('could not load video', err);
+        if (current === i) showPlaybackError(i);
+      });
+
     draw();
   });
   t.addEventListener('targetLost', () => {
@@ -637,7 +760,7 @@ startBtn.addEventListener('click', async () => {
     ar.start();
     started = true;
     intro.hidden = true;
-    unmuteBtn.hidden = false;
+    applyMuted();
   } catch (err) {
     lastErr = err.message;
     state = 'start failed';
@@ -646,12 +769,62 @@ startBtn.addEventListener('click', async () => {
   draw();
 });
 
-// iOS Safari blocks audio until a user gesture; one tap, once per page load.
+// iOS blocks autoplay with sound until a user gesture. That is not something
+// to work around — it is one tap, and the choice is then remembered for the
+// rest of the visit so the customer is not asked again on every page.
+let muted = true;
+
+try {
+  if (sessionStorage.getItem(UNMUTE_KEY) === '1') muted = false;
+} catch (err) {
+  // Private mode and blocked storage both throw. Staying muted is the safe
+  // default, so there is nothing to recover from.
+  console.warn('sessionStorage unavailable', err);
+}
+
+function applyMuted() {
+  videos.forEach(v => { v.muted = muted; });
+  unmuteBtn.hidden = !started || !muted;
+}
+
 unmuteBtn.addEventListener('click', () => {
-  videos.forEach(v => { v.muted = false; });
+  muted = false;
+  try { sessionStorage.setItem(UNMUTE_KEY, '1'); } catch { /* not essential */ }
+  applyMuted();
   if (current >= 0) videos[current].play().catch(() => {});
-  unmuteBtn.hidden = true;
   draw();
+});
+
+/**
+ * A video that will not load, said plainly.
+ *
+ * ensureSource() has already retried once silently by the time this shows, so
+ * the customer is only interrupted for a real failure — and is given the two
+ * things that actually help rather than an error code.
+ */
+function showPlaybackError(i) {
+  lastFailed = i;
+  state = 'playback failed';
+  showPanel(denied, T.cantLoadHeading, T.cantLoadBody, false);
+  // Retrying means trying the fetch again, not reloading the whole scanner.
+  retryBtn.hidden = false;
+}
+
+retryBtn.addEventListener('click', async () => {
+  retryBtn.disabled = true;
+  const i = lastFailed;
+  if (i < 0) { retryBtn.disabled = false; return; }
+  sources[i] = null;
+  try {
+    await ensureSource(i);
+    denied.hidden = true;
+    intro.hidden = true;
+    retryBtn.hidden = true;
+    if (current === i) { revealPlane(i); videos[i].play().catch(() => {}); }
+  } catch (err) {
+    console.warn('retry failed', err);
+  }
+  retryBtn.disabled = false;
 });
 
 // Leaving the page has to release the camera. Without this the getUserMedia

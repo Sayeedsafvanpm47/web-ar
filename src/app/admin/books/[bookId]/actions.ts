@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireStaff } from '@/lib/auth';
+import { reindexAfterRemoval } from '@/lib/target-mapping';
 import { deleteObject, photoKey, signUpload, videoKey } from '@/lib/r2';
 import { createClient } from '@/lib/supabase/server';
 
@@ -219,22 +220,30 @@ export async function deleteMemory(
     .from('memories')
     .select('id, target_index')
     .eq('book_id', bookId)
-    .gt('target_index', removed)
     .order('target_index', { ascending: true });
 
-  // Ascending order matters: each slot below is vacated before the next row
-  // moves into it, so the unique (book_id, target_index) constraint never
-  // trips mid-renumber.
-  for (const row of after ?? []) {
+  // The renumbering rule itself lives in src/lib/target-mapping.ts, where it
+  // is unit tested — including that it emits moves in an order where each slot
+  // is vacated before the next row moves into it, so the unique
+  // (book_id, target_index) constraint never trips mid-renumber.
+  const moves = reindexAfterRemoval(
+    (after ?? []).map((row) => ({
+      id: row.id as string,
+      targetIndex: row.target_index as number,
+    })),
+    removed,
+  );
+
+  for (const move of moves) {
     const { error } = await supabase
       .from('memories')
-      .update({ target_index: (row.target_index as number) - 1 })
-      .eq('id', row.id as string);
+      .update({ target_index: move.targetIndex })
+      .eq('id', move.id);
     if (error) {
       return {
         ok: false,
         error:
-          `Deleted, but renumbering failed at index ${row.target_index}: ` +
+          `Deleted, but renumbering failed moving to index ${move.targetIndex}: ` +
           `${error.message}. Indexes are now inconsistent — fix before compiling.`,
       };
     }

@@ -152,3 +152,74 @@ nothing and adds a path where teardown silently stops working.
    that still looked live, leaving a dead screen with no obvious way out.
    `pageshow` with `event.persisted` now reloads. Needs a device to confirm —
    iOS Safari uses bfcache aggressively and is where this will show up.
+
+---
+
+## Phase 5 deviations
+
+### 10. Video URLs are fetched when a photo is found, not embedded
+
+The document now carries memory ids and no `src`. `ensureSource(i)` fetches a
+signed URL from `/b/[bookId]/media/[memoryId]` on `targetFound`, retries once
+silently, and surfaces a calm failure on the second attempt.
+
+**Why:** a document holding N signed URLs hands out N live credentials to
+anything that can read the HTML, and those URLs start expiring the moment the
+page loads — a customer who reads the intro for half an hour finds the videos
+dead before pressing start.
+
+**This is the highest-risk change in the phase.** A-Frame builds the video
+material at scene init, from an element that now has no source. The code calls
+`setAttribute('material', 'src', '#vN')` once the video has frames, to force
+the texture to be rebuilt if the first attempt produced nothing.
+
+**Needs a device.** If the plane stays blank after a photo is found, this is
+the cause. The revert is to sign videos server-side again in
+`lookupPublicBook` and restore the `src` attribute on the `<video>` tags.
+
+### 11. The video texture is cropped, not stretched
+
+`coverFit(i)` sets `texture.repeat` and `texture.offset` so a video whose
+aspect ratio differs from the printed photo is cropped rather than squashed.
+This is `object-fit: cover` for a three.js texture.
+
+The plane geometry is untouched — it is still `width="1"` with height from the
+photo's aspect. Only the material's UV mapping changes.
+
+### 12. The plane fades in instead of flashing black
+
+Planes start at `opacity: 0` and fade up once the video has frames. A video
+texture is black until the first frame decodes, and a black rectangle landing
+on a customer's photo is worse than a short delay. Because the printed photo is
+physically there and visible through the camera, keeping the plane transparent
+achieves what a poster image would — the real photo shows through — without
+fetching a still.
+
+**Deviation from the brief**, which asked for the photo's own still with a
+crossfade. In AR the still would be drawn directly over the identical physical
+photo, so it is invisible by construction. The non-AR player at
+`/b/[bookId]/m/[memoryId]` does use a real `poster`, where there is no physical
+photo to show through.
+
+### 13. Unmute is remembered for the visit
+
+`sessionStorage` under `bp-unmuted`. Wrapped in try/catch: private mode and
+blocked storage both throw, and staying muted is the safe default.
+
+---
+
+## Phase 5 verification status
+
+| Claim | Verified how |
+|---|---|
+| Target index N maps to memory N, including after delete and reorder | **11 unit tests**, `npm test`. The shipped code calls the same module. |
+| Media endpoint refuses unknown book or memory | Confirmed on a running server: 404 for both |
+| Media endpoint is `no-store, private`, `noindex` | Confirmed on a running server |
+| Scanner HTML carries no signed video URL | **NOT VERIFIED.** The only test book is expired, so `/scan` returns the 410 page. The check reported zeros from a 1,314-byte error page, not from the scanner. |
+| Lazy source rebuilds the video texture | **NOT VERIFIED** — needs a device and a live book |
+| Cover-fit crops rather than stretches | **NOT VERIFIED** — needs a video whose ratio differs from its photo |
+| Fade-in removes the black flash | **NOT VERIFIED** — needs a device |
+| Unmute persists across pages in a visit | **NOT VERIFIED** — needs a device |
+
+To unblock all of these: extend the test book's hosting date in
+**/admin/books/[id] → Hosting and access**, then reload the scanner.
