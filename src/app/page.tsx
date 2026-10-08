@@ -1,7 +1,7 @@
 import Link from 'next/link';
 
 export const metadata = {
-  title: 'Living Memories',
+  title: 'Live photo book',
   description: 'Printed photo books that play your videos.',
 };
 
@@ -16,12 +16,12 @@ export default function Home() {
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-8 py-12">
       <header>
-        <p className="bp-eyebrow text-grey-4">Black Pearl</p>
+        <p className="bp-eyebrow text-grey-4">Blackpearl</p>
       </header>
 
       <div className="flex flex-1 flex-col justify-center py-16">
         <h1 className="font-display text-[2.75rem] leading-[1.02] tracking-tight">
-          Living Memories
+          Live photo book
         </h1>
         <p className="text-grey-3 mt-5 text-sm leading-relaxed">
           Printed photo books that play your videos. Scan the QR code inside

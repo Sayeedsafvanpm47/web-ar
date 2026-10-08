@@ -202,7 +202,7 @@ function messagePage(heading: string, body: string, status: number): Response {
     `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Living Memories</title>
+<title>Live photo book</title>
 ${FONT_LINKS}
 <style>
 body{margin:0;background:#FAFAF8;color:#0A0A0A;display:grid;place-items:center;
@@ -213,7 +213,7 @@ h1{font-family:Fraunces,Georgia,serif;font-weight:400;font-size:1.75rem;
 line-height:1.15;letter-spacing:-.02em;margin:0 0 .75rem}
 p{color:#6B6B6B;font-size:.875rem;line-height:1.6;margin:0;max-width:22rem}
 </style>
-</head><body><div><p class="eyebrow">Black Pearl</p><h1>${escapeHtml(heading)}</h1><p>${escapeHtml(body)}</p></div></body></html>`,
+</head><body><div><p class="eyebrow">Blackpearl</p><h1>${escapeHtml(heading)}</h1><p>${escapeHtml(body)}</p></div></body></html>`,
     status,
   );
 }
@@ -223,7 +223,20 @@ export async function GET(
   { params }: { params: Promise<{ bookId: string }> },
 ) {
   const { bookId } = await params;
-  const result = await lookupPublicBook(bookId);
+  // withMedia: this route embeds the target file and every video directly in
+  // the document, so unlike the entry page it genuinely needs them signed.
+  const result = await lookupPublicBook(bookId, { withMedia: true });
+
+  // A book with no compiled target file, or whose page indexes no longer line
+  // up with it, cannot be scanned — but it can still be watched page by page,
+  // so send the customer there rather than telling them it is broken.
+  if (result.status === 'ok' && !result.book.scannable) {
+    return messagePage(
+      'This book isn’t ready to scan yet',
+      'You can still watch every page without the camera — open the book link and choose "Watch without the camera".',
+      410,
+    );
+  }
 
   if (result.status !== 'ok') {
     // A revoked book and an id that was never real must be indistinguishable
@@ -234,13 +247,13 @@ export async function GET(
       'not-found': ['We couldn’t find this book', 'Check the link, or scan the code again.'],
       revoked: ['We couldn’t find this book', 'Check the link, or scan the code again.'],
       expired: ['This book’s hosting has ended', 'Get in touch to renew and we’ll bring the videos back.'],
-      'not-ready': ['This book isn’t ready yet', 'We’re still preparing the videos. Please try again shortly.'],
+      empty: ['This book isn’t ready yet', 'We’re still preparing the videos. Please try again shortly.'],
       unavailable: ['Something went wrong at our end', 'This is our problem, not yours, and your videos are safe. Please try again in a few minutes.'],
-    }[result.status];
+    }[result.status] as [string, string];
     const status =
       result.status === 'unavailable'
         ? 503
-        : result.status === 'expired' || result.status === 'not-ready'
+        : result.status === 'expired' || result.status === 'empty'
           ? 410
           : 404;
     return messagePage(copy[0], copy[1], status);
@@ -257,7 +270,12 @@ export async function GET(
     warmupTolerance: numParam(query, 'warmup', TRACKING_DEFAULTS.warmupTolerance),
   };
 
-  const ordered = [...book.memories].sort((a, b) => a.targetIndex - b.targetIndex);
+  // scannable is true and withMedia was requested, so every URL below is
+  // present. The type allows null because other callers do not ask for media.
+  const mindUrl = book.mindUrl ?? '';
+  const ordered = [...book.memories]
+    .sort((a, b) => a.targetIndex - b.targetIndex)
+    .map((m) => ({ ...m, videoUrl: m.videoUrl ?? '' }));
 
   const videoTags = ordered
     .map(
@@ -302,7 +320,7 @@ ${FONT_LINKS}
 ${debug ? '<div id="dbg">booting</div>' : ''}
 
 <div id="intro">
-  <p class="eyebrow" style="color: var(--grey-4)">Black Pearl · Living Memories</p>
+  <p class="eyebrow" style="color: var(--grey-4)">Blackpearl · Live photo book</p>
   <div>
     <h1>${escapeHtml(book.title)}</h1>
     <p>Hold your phone over a photo in the book and it starts playing.</p>
@@ -329,7 +347,7 @@ ${videoTags}
 
 <div id="wrap">
   <a-scene
-    mindar-image="imageTargetSrc: ${escapeHtml(book.mindUrl)}; maxTrack: 1; autoStart: false; uiLoading: no; uiScanning: no; uiError: no; filterMinCF: ${tracking.filterMinCF}; filterBeta: ${tracking.filterBeta}; missTolerance: ${tracking.missTolerance}; warmupTolerance: ${tracking.warmupTolerance}"
+    mindar-image="imageTargetSrc: ${escapeHtml(mindUrl)}; maxTrack: 1; autoStart: false; uiLoading: no; uiScanning: no; uiError: no; filterMinCF: ${tracking.filterMinCF}; filterBeta: ${tracking.filterBeta}; missTolerance: ${tracking.missTolerance}; warmupTolerance: ${tracking.warmupTolerance}"
     embedded color-space="sRGB"
     renderer="colorManagement: true, physicallyCorrectLights"
     xr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">

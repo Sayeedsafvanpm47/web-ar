@@ -142,6 +142,7 @@
 @theme {
   --color-ink: #0a0a0a;
   --color-paper: #fafaf8;
+  --color-grey-1: #1a1a1a;
   --color-grey-2: #2e2e2e;
   --color-grey-3: #6b6b6b;
   --color-grey-4: #a3a3a3;
@@ -150,6 +151,8 @@
 
   --font-display: var(--font-display), Georgia, serif;
   --font-body: var(--font-body), system-ui, sans-serif;
+  /* Applied only under dir="rtl", via .font-arabic on the customer shell. */
+  --font-arabic: var(--font-arabic), var(--font-body), system-ui, sans-serif;
 }
 
 @layer components {

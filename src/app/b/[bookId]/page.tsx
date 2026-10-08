@@ -1,92 +1,96 @@
+import { headers } from 'next/headers';
 import Link from 'next/link';
 
+import {
+  CustomerShell,
+  Eyebrow,
+  LanguageToggle,
+  QuietLink,
+  StateScreen,
+  localeHref,
+} from '@/components/customer/chrome';
+import { getDictionary, resolveLocale } from '@/lib/i18n';
 import { lookupPublicBook } from '@/lib/public-book';
 
 export const metadata = {
-  title: 'Living Memories',
+  title: 'Live photo book',
   robots: { index: false, follow: false },
 };
 
 /**
- * Public entry from the QR code.
+ * Public entry from the QR code printed in the book.
  *
  * No login, no account. The book id in the URL is the whole credential, which
- * is why this page shows the book title and nothing about the customer.
+ * is why this page shows the title and nothing about the customer.
  *
- * The button here rather than an auto-start is deliberate: iOS will not grant
- * camera access without a user gesture, and a permission prompt firing
- * unannounced on a funeral book would be awful.
+ * No media is signed here: the entry page plays nothing, and minting a signed
+ * URL per video for a page that may never lead to the scanner hands out
+ * credentials nobody asked for.
+ *
+ * The camera is requested on the next screen, never here. iOS will not grant
+ * access without a user gesture, and a permission prompt firing unannounced on
+ * a funeral book would be awful.
  */
 export default async function BookLanding({
   params,
+  searchParams,
 }: {
   params: Promise<{ bookId: string }>;
+  searchParams: Promise<{ lang?: string }>;
 }) {
-  const { bookId } = await params;
+  const [{ bookId }, { lang }, headerList] = await Promise.all([
+    params,
+    searchParams,
+    headers(),
+  ]);
+
+  const locale = resolveLocale(lang, headerList.get('accept-language'));
+  const t = getDictionary(locale);
+  const path = `/b/${bookId}`;
+
   const result = await lookupPublicBook(bookId);
 
   if (result.status !== 'ok') {
-    const message = {
-      'not-found': {
-        heading: 'We couldn’t find this book',
-        body: 'Check the link, or scan the code again. If it still doesn’t work, get in touch and we’ll help.',
-      },
-      // Identical to 'not-found' on purpose — see the note in scan/route.ts.
-      // The customer whose book was revoked learns nothing from this page, but
-      // they are the one person who can simply ask us.
-      revoked: {
-        heading: 'We couldn’t find this book',
-        body: 'Check the link, or scan the code again. If it still doesn’t work, get in touch and we’ll help.',
-      },
-      expired: {
-        heading: 'This book’s hosting has ended',
-        body: 'The videos in this book are no longer being hosted. Get in touch to renew and we’ll bring them back.',
-      },
-      'not-ready': {
-        heading: 'This book isn’t ready yet',
-        body: 'We’re still preparing the videos for this book. Please try again shortly.',
-      },
-      unavailable: {
-        heading: 'Something went wrong at our end',
-        body: 'This is our problem, not yours, and your videos are safe. Please try again in a few minutes.',
-      },
+    // 'revoked' shows the same copy as 'not-found' on purpose: the response
+    // must not confirm that a given id is real. See scan/route.ts.
+    const copy = {
+      'not-found': t.states.notFound,
+      revoked: t.states.notFound,
+      expired: t.states.expired,
+      empty: t.states.empty,
+      unavailable: t.states.unavailable,
     }[result.status];
 
     return (
-      <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center gap-4 px-8 text-center">
-        <p className="bp-eyebrow text-grey-4">Black Pearl</p>
-        <h1 className="font-display text-3xl leading-tight tracking-tight">
-          {message.heading}
-        </h1>
-        <p className="text-grey-3 text-sm leading-relaxed">{message.body}</p>
-      </main>
+      <StateScreen
+        locale={locale}
+        path={path}
+        heading={copy.heading}
+        body={copy.body}
+        reference={'reference' in result ? result.reference : null}
+      />
     );
   }
 
   const { book } = result;
 
-  const steps = [
-    'Allow camera access when your phone asks.',
-    'Hold your phone over a photo in the book.',
-    'Keep it steady — the photo starts playing.',
-  ];
-
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-8 py-12">
-      <header className="flex items-center justify-between">
-        <p className="bp-eyebrow text-grey-4">Black Pearl</p>
-        <p className="bp-eyebrow text-grey-4">Living Memories</p>
+    <CustomerShell locale={locale}>
+      <header className="flex items-center justify-between px-8 pt-[max(1.5rem,env(safe-area-inset-top))]">
+        <Eyebrow>{t.brand}</Eyebrow>
+        <LanguageToggle locale={locale} path={path} />
       </header>
 
-      <div className="flex flex-1 flex-col justify-center py-16">
-        <h1 className="font-display text-[2.75rem] leading-[1.02] tracking-tight">
+      <main className="flex flex-1 flex-col justify-center px-8 py-12">
+        <Eyebrow>{t.entry.eyebrow}</Eyebrow>
+        <h1 className="font-display mt-3 text-[2.75rem] leading-[1.02] tracking-tight">
           {book.title}
         </h1>
 
         <div className="bg-grey-5 mt-8 h-px w-full" />
 
         <ol className="mt-8 space-y-4">
-          {steps.map((step, i) => (
+          {t.entry.steps.map((step, i) => (
             <li key={step} className="flex gap-4">
               <span className="bp-eyebrow text-grey-4 pt-[3px] tabular-nums">
                 {String(i + 1).padStart(2, '0')}
@@ -95,22 +99,34 @@ export default async function BookLanding({
             </li>
           ))}
         </ol>
-      </div>
+      </main>
 
-      <div className="space-y-5">
-        <Link
-          href={`/b/${book.id}/scan`}
-          className="bg-ink text-paper hover:bg-grey-2 flex w-full items-center justify-center rounded-full px-8 py-4 text-base font-medium transition-colors"
-        >
-          Scan to play
-        </Link>
+      <footer className="space-y-5 px-8 pb-[max(2rem,env(safe-area-inset-bottom))]">
+        {book.scannable ? (
+          <Link
+            href={localeHref(`/b/${book.id}/scan`, locale)}
+            className="bg-ink text-paper hover:bg-grey-2 flex min-h-14 w-full items-center justify-center rounded-full px-8 text-base font-medium transition-colors"
+          >
+            {t.entry.primaryAction}
+          </Link>
+        ) : null}
+
+        <div className="flex flex-col items-center gap-1">
+          {/* Always offered, scannable or not. The camera failing must never
+              mean the customer cannot watch their video. */}
+          <QuietLink href={`/b/${book.id}/pages`} locale={locale}>
+            {t.entry.withoutCamera}
+          </QuietLink>
+          <QuietLink href={`/b/${book.id}/downloads`} locale={locale}>
+            {t.entry.downloads}
+          </QuietLink>
+        </div>
 
         <p className="text-grey-4 text-center text-xs leading-relaxed">
-          {book.memories.length} photo
-          {book.memories.length === 1 ? '' : 's'} in this book. Works best in
-          good light, with the whole photo in frame.
+          {t.entry.pageCount(book.memories.length)}
+          {book.scannable ? ` · ${t.entry.conditions}` : ''}
         </p>
-      </div>
-    </main>
+      </footer>
+    </CustomerShell>
   );
 }
