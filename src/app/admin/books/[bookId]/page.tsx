@@ -176,12 +176,18 @@ export default async function BookDetailPage({
             and the database disagree about which video belongs to which photo.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex gap-6">
           <Link
             href={`/admin/books/${book.id}/compile`}
             className="text-sm underline"
           >
             Go to compiler →
+          </Link>
+          <Link
+            href={`/admin/books/${book.id}/print`}
+            className="text-sm underline"
+          >
+            Print files and QR codes →
           </Link>
         </CardContent>
       </Card>
