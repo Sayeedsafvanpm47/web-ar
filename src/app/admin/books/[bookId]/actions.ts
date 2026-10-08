@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireStaff } from '@/lib/auth';
+import { findDuplicate, type HashedPhoto } from '@/lib/photo-check';
 import { reindexAfterRemoval, reindexAfterReorder } from '@/lib/target-mapping';
 import { deleteObject, photoKey, signUpload, videoKey } from '@/lib/r2';
 import { createClient } from '@/lib/supabase/server';
@@ -22,17 +23,26 @@ export type StartUploadInput = {
   videoBytes: number;
   photoAspect: number;
   videoDurationSeconds: number;
+  /** 64-bit difference hash of the photo, computed in the browser. */
+  photoHash: string;
 };
 
 export type StartUploadResult =
   | {
+      ok: false;
+      error: string;
+      /** Set when the refusal is a near-duplicate, so the UI can name it. */
+      duplicateOf?: string;
+    }
+  | {
       ok: true;
+      /** A non-blocking caution shown after the upload succeeds. */
+      warning?: string;
       memoryId: string;
       targetIndex: number;
       photoUrl: string;
       videoUrl: string;
-    }
-  | { ok: false; error: string };
+    };
 
 /**
  * Creates the memory row and returns presigned PUT URLs.
@@ -62,6 +72,10 @@ export async function startUpload(
     return { ok: false, error: 'Could not read the photo dimensions.' };
   }
 
+  if (!/^[0-9a-f]{16}$/.test(input.photoHash)) {
+    return { ok: false, error: 'Could not fingerprint that photo.' };
+  }
+
   const supabase = await createClient();
 
   const { data: book } = await supabase
@@ -71,6 +85,35 @@ export async function startUpload(
     .maybeSingle();
 
   if (!book) return { ok: false, error: 'Book not found.' };
+
+  // Refuse a photo the tracker could confuse with one already in this book.
+  // Checked before anything is stored, because the alternative is finding out
+  // after the book is printed and a customer is watching the wrong video.
+  const { data: siblings } = await supabase
+    .from('memories')
+    .select('id, page_label, target_index, photo_hash')
+    .eq('book_id', input.bookId)
+    .not('photo_hash', 'is', null);
+
+  const existing: HashedPhoto[] = (siblings ?? []).map((row) => ({
+    id: row.id as string,
+    label:
+      (row.page_label as string | null) ??
+      `page ${(row.target_index as number) + 1}`,
+    hash: (row.photo_hash as string | null) ?? '',
+  }));
+
+  const duplicate = findDuplicate(input.photoHash, existing);
+  if (duplicate?.similarity === 'identical') {
+    return {
+      ok: false,
+      error:
+        `This photo is almost identical to "${duplicate.against.label}". ` +
+        'The scanner would not reliably tell them apart, so one page could ' +
+        'play the video belonging to the other one. Use a different photo.',
+      duplicateOf: duplicate.against.id,
+    };
+  }
 
   // target_index is the position in the compiled .mind file and is
   // load-bearing: a wrong index plays the wrong family's video with no error.
@@ -91,6 +134,7 @@ export async function startUpload(
       book_id: input.bookId,
       target_index: targetIndex,
       page_label: input.pageLabel || null,
+      photo_hash: input.photoHash,
       photo_aspect: input.photoAspect,
       video_duration_seconds: input.videoDurationSeconds || null,
     })
@@ -105,6 +149,10 @@ export async function startUpload(
 
   return {
     ok: true,
+    warning:
+      duplicate?.similarity === 'similar'
+        ? `This photo looks similar to "${duplicate.against.label}". Check they are distinct enough before printing.`
+        : undefined,
     memoryId,
     targetIndex,
     photoUrl: await signUpload(

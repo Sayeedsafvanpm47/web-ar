@@ -7,9 +7,51 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
+import { dHashFromLuma } from '@/lib/photo-check';
+
 import { confirmUpload, startUpload } from './actions';
 
 type Phase = 'idle' | 'preparing' | 'photo' | 'video' | 'saving';
+
+/**
+ * A 64-bit difference hash of the photo, computed here so a near-duplicate is
+ * caught before any bytes are uploaded.
+ *
+ * Drawn at 9x8 and converted to brightness: deliberately tiny, so the hash
+ * survives recompression and exposure differences but still separates two
+ * genuinely different photographs.
+ */
+function hashPhoto(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 9;
+        canvas.height = 8;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) throw new Error('no 2d context');
+        ctx.drawImage(img, 0, 0, 9, 8);
+        const { data } = ctx.getImageData(0, 0, 9, 8);
+        const luma: number[] = [];
+        for (let i = 0; i < data.length; i += 4) {
+          // Rec. 601 luma. Colour is not what the tracker matches on.
+          luma.push(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+        }
+        resolve(dHashFromLuma(luma));
+      } catch (err) {
+        reject(err as Error);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not read the image'));
+    };
+    img.src = url;
+  });
+}
 
 /** Reads a photo's aspect ratio (height / width) without uploading it. */
 function readPhotoAspect(file: File): Promise<number> {
@@ -88,12 +130,14 @@ export function MemoryUploader({ bookId }: { bookId: string }) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [pct, setPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const busy = phase !== 'idle';
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
+    setWarning(null);
 
     const form = new FormData(e.currentTarget);
     const photo = form.get('photo') as File | null;
@@ -107,9 +151,10 @@ export function MemoryUploader({ bookId }: { bookId: string }) {
 
     try {
       setPhase('preparing');
-      const [photoAspect, videoDurationSeconds] = await Promise.all([
+      const [photoAspect, videoDurationSeconds, photoHash] = await Promise.all([
         readPhotoAspect(photo),
         readVideoDuration(video),
+        hashPhoto(photo),
       ]);
 
       const started = await startUpload({
@@ -121,6 +166,7 @@ export function MemoryUploader({ bookId }: { bookId: string }) {
         videoBytes: video.size,
         photoAspect,
         videoDurationSeconds,
+        photoHash,
       });
 
       if (!started.ok) {
@@ -145,6 +191,7 @@ export function MemoryUploader({ bookId }: { bookId: string }) {
         return;
       }
 
+      setWarning(started.warning ?? null);
       formRef.current?.reset();
       setPhase('idle');
       setPct(0);
@@ -193,6 +240,9 @@ export function MemoryUploader({ bookId }: { bookId: string }) {
           </div>
         ) : null}
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
+        {warning ? (
+          <p className="text-sm text-amber-700 dark:text-amber-400">{warning}</p>
+        ) : null}
         <p className="text-muted-foreground text-xs">
           Files go straight from this browser to R2 and never pass through the
           app server. The photo&apos;s aspect ratio is read here and stored, because

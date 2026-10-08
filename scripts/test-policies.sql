@@ -188,3 +188,30 @@ begin
   raise notice 'book reference: all assertions passed';
 end
 $ref$;
+
+-- ---------------------------------------------------- photo hash checks --
+do $hash$
+declare
+  n int;
+begin
+  -- Format is enforced by the database, not just by the application.
+  begin
+    update public.memories set photo_hash = 'NOT-A-HASH'
+     where book_id = '44444444-4444-4444-8444-444444444444';
+    raise exception 'FAIL: an invalid photo_hash was accepted';
+  exception
+    when check_violation then null;  -- expected
+  end;
+
+  update public.memories set photo_hash = 'a1b2c3d4e5f60718'
+   where book_id = '44444444-4444-4444-8444-444444444444';
+  select count(*) into n from public.memories where photo_hash is not null;
+  if n <> 1 then raise exception 'FAIL: valid photo_hash was not stored'; end if;
+
+  -- Null stays allowed: pages predating the check must not break.
+  update public.memories set photo_hash = null
+   where book_id = '44444444-4444-4444-8444-444444444444';
+
+  raise notice 'photo hash: all assertions passed';
+end
+$hash$;
