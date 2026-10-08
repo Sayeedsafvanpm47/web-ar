@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireStaff } from '@/lib/auth';
-import { reindexAfterRemoval } from '@/lib/target-mapping';
+import { reindexAfterRemoval, reindexAfterReorder } from '@/lib/target-mapping';
 import { deleteObject, photoKey, signUpload, videoKey } from '@/lib/r2';
 import { createClient } from '@/lib/supabase/server';
 
@@ -307,6 +307,84 @@ export async function setRevoked(
 
   if (error) return { ok: false, error: error.message };
 
+  revalidatePath(`/admin/books/${bookId}`);
+  return { ok: true };
+}
+
+/**
+ * Reorders the pages of a book.
+ *
+ * Takes memory ids in their new visual order and assigns 0..N-1. The rule
+ * itself lives in src/lib/target-mapping.ts, where it is unit tested — this
+ * function only talks to the database.
+ *
+ * Writes happen inside a gap: every affected row is moved far out of range
+ * first, then into its final slot. A reorder is not a compaction, so two rows
+ * routinely want to swap places, and without the gap the unique
+ * (book_id, target_index) constraint trips on the first write.
+ */
+export async function reorderMemories(
+  bookId: string,
+  idsInNewOrder: string[],
+): Promise<{ ok: boolean; error?: string }> {
+  await requireStaff();
+
+  const supabase = await createClient();
+
+  const { data: current } = await supabase
+    .from('memories')
+    .select('id, target_index')
+    .eq('book_id', bookId)
+    .order('target_index');
+
+  const items = (current ?? []).map((row) => ({
+    id: row.id as string,
+    targetIndex: row.target_index as number,
+  }));
+
+  // Refuse anything that is not a permutation of this book's pages. A missing
+  // or foreign id would leave holes, and a hole silently shifts every later
+  // photo onto the wrong video.
+  const known = new Set(items.map((i) => i.id));
+  if (
+    idsInNewOrder.length !== items.length ||
+    new Set(idsInNewOrder).size !== idsInNewOrder.length ||
+    idsInNewOrder.some((id) => !known.has(id))
+  ) {
+    return { ok: false, error: 'That ordering does not match this book.' };
+  }
+
+  const moves = reindexAfterReorder(items, idsInNewOrder);
+  if (moves.length === 0) return { ok: true };
+
+  const PARK = 100_000;
+
+  for (const [offset, move] of moves.entries()) {
+    const { error } = await supabase
+      .from('memories')
+      .update({ target_index: PARK + offset })
+      .eq('id', move.id)
+      .eq('book_id', bookId);
+    if (error) return { ok: false, error: `Could not reorder: ${error.message}` };
+  }
+
+  for (const move of moves) {
+    const { error } = await supabase
+      .from('memories')
+      .update({ target_index: move.targetIndex })
+      .eq('id', move.id)
+      .eq('book_id', bookId);
+    if (error) {
+      return {
+        ok: false,
+        error:
+          `Reorder failed partway at page ${move.targetIndex + 1}: ` +
+          `${error.message}. Page order is inconsistent — fix before compiling.`,
+      };
+    }
+  }
+
+  await invalidateCompiledTargets(bookId);
   revalidatePath(`/admin/books/${bookId}`);
   return { ok: true };
 }

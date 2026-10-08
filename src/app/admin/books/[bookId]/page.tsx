@@ -9,19 +9,12 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { requireStaff } from '@/lib/auth';
 import { todayISO } from '@/lib/dates';
 import { signDownload } from '@/lib/r2';
 import { createClient } from '@/lib/supabase/server';
 
-import { MemoryRow, type MemoryView } from './memory-row';
+import { MemoryList, type MemoryView } from './memory-list';
 import { MemoryUploader } from './memory-uploader';
 import { SettingsForm } from './settings-form';
 
@@ -42,6 +35,8 @@ type MemoryRecord = {
   video_object_key: string | null;
   photo_aspect: number | null;
   video_duration_seconds: number | null;
+  feature_points_total: number | null;
+  feature_points_coarsest: number | null;
 };
 
 export default async function BookDetailPage({
@@ -66,7 +61,7 @@ export default async function BookDetailPage({
   const { data: memoryData } = await supabase
     .from('memories')
     .select(
-      'id, target_index, page_label, photo_object_key, video_object_key, photo_aspect, video_duration_seconds',
+      'id, target_index, page_label, photo_object_key, video_object_key, photo_aspect, video_duration_seconds, feature_points_total, feature_points_coarsest',
     )
     .eq('book_id', bookId)
     .order('target_index');
@@ -164,28 +159,13 @@ export default async function BookDetailPage({
         </CardContent>
       </Card>
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Index</TableHead>
-            <TableHead>Photo</TableHead>
-            <TableHead>Label</TableHead>
-            <TableHead>Aspect</TableHead>
-            <TableHead>Length</TableHead>
-            <TableHead>State</TableHead>
-            <TableHead />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {memories.map((m) => (
-            <MemoryRow key={m.id} bookId={book.id} memory={m} />
-          ))}
-        </TableBody>
-      </Table>
-
-      {memories.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No memories yet.</p>
-      ) : null}
+      {/* Keyed on the server's ordering so a refresh remounts with fresh
+          data, rather than an effect copying props into state. */}
+      <MemoryList
+        key={memories.map((m) => `${m.id}:${m.target_index}`).join('|')}
+        bookId={book.id}
+        memories={memories}
+      />
 
       <Card>
         <CardHeader>
