@@ -15,6 +15,7 @@ import { signDownload } from '@/lib/r2';
 import { createClient } from '@/lib/supabase/server';
 
 import { MemoryList, type MemoryView } from './memory-list';
+import { ReadyButton } from './ready-button';
 import { MemoryUploader } from './memory-uploader';
 import { SettingsForm } from './settings-form';
 
@@ -176,7 +177,9 @@ export default async function BookDetailPage({
             and the database disagree about which video belongs to which photo.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex gap-6">
+        <CardContent className="space-y-4">
+          <ReadyButton bookId={book.id} status={book.status} />
+          <div className="flex gap-6">
           <Link
             href={`/admin/books/${book.id}/compile`}
             className="text-sm underline"
@@ -189,6 +192,7 @@ export default async function BookDetailPage({
           >
             Print files and QR codes →
           </Link>
+          </div>
         </CardContent>
       </Card>
     </main>

@@ -3,8 +3,12 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireStaff } from '@/lib/auth';
-import { findDuplicate, type HashedPhoto } from '@/lib/photo-check';
-import { reindexAfterRemoval, reindexAfterReorder } from '@/lib/target-mapping';
+import { findDuplicate, rateTrackability, type HashedPhoto } from '@/lib/photo-check';
+import {
+  isContiguousFromZero,
+  reindexAfterRemoval,
+  reindexAfterReorder,
+} from '@/lib/target-mapping';
 import { deleteObject, photoKey, signUpload, videoKey } from '@/lib/r2';
 import { createClient } from '@/lib/supabase/server';
 
@@ -433,6 +437,90 @@ export async function reorderMemories(
   }
 
   await invalidateCompiledTargets(bookId);
+  revalidatePath(`/admin/books/${bookId}`);
+  return { ok: true };
+}
+
+/**
+ * Marks a book ready to compile.
+ *
+ * Compiling is the point of no return before print: the target file it
+ * produces is what the printed QR codes will be matched against. So the
+ * preconditions are checked here, once, rather than being left to whoever
+ * happens to open the compiler.
+ *
+ * Every check guards a failure that is invisible until a customer is holding
+ * the finished book.
+ */
+export async function markReady(
+  bookId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  await requireStaff();
+
+  const supabase = await createClient();
+
+  const { data: rows } = await supabase
+    .from('memories')
+    .select('id, target_index, page_label, photo_object_key, video_object_key, feature_points_total')
+    .eq('book_id', bookId)
+    .order('target_index');
+
+  const memories = rows ?? [];
+  if (memories.length === 0) {
+    return { ok: false, error: 'This book has no pages yet.' };
+  }
+
+  const incomplete = memories.filter(
+    (m) => !m.photo_object_key || !m.video_object_key,
+  );
+  if (incomplete.length > 0) {
+    return {
+      ok: false,
+      error:
+        `${incomplete.length} page(s) are missing a photo or a video. ` +
+        'Finish or delete them first — a half-uploaded page would be ' +
+        'skipped by the compiler and shift every later page onto the wrong video.',
+    };
+  }
+
+  const positioned = memories.map((m) => ({
+    id: m.id as string,
+    targetIndex: m.target_index as number,
+  }));
+  if (!isContiguousFromZero(positioned)) {
+    return {
+      ok: false,
+      error:
+        'Page numbering has a gap. Reorder the pages to close it before ' +
+        'compiling, or videos will play on the wrong photos.',
+    };
+  }
+
+  // Trackability is only known after a compile, so this can only catch photos
+  // measured on a previous run. It is a backstop, not the first line of
+  // defence — that is the check at upload time.
+  const unusable = memories.filter(
+    (m) => rateTrackability(m.feature_points_total as number | null) === 'unusable',
+  );
+  if (unusable.length > 0) {
+    const names = unusable
+      .map((m) => (m.page_label as string | null) ?? `page ${(m.target_index as number) + 1}`)
+      .join(', ');
+    return {
+      ok: false,
+      error:
+        `These photos scored too low to track reliably: ${names}. ` +
+        'Replace them before printing.',
+    };
+  }
+
+  const { error } = await supabase
+    .from('books')
+    .update({ status: 'ready' })
+    .eq('id', bookId);
+
+  if (error) return { ok: false, error: error.message };
+
   revalidatePath(`/admin/books/${bookId}`);
   return { ok: true };
 }

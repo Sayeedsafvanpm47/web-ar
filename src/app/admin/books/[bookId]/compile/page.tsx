@@ -28,7 +28,7 @@ export default async function CompilePage({
 
   const { data: book } = await supabase
     .from('books')
-    .select('id, title, mind_compiled_at')
+    .select('id, title, status, mind_compiled_at')
     .eq('id', bookId)
     .maybeSingle();
 
@@ -121,7 +121,15 @@ export default async function CompilePage({
             </p>
           )}
 
-          {contiguous && targets.length > 0 ? (
+          {book.status !== 'ready' ? (
+            <p className="text-sm text-amber-700 dark:text-amber-400">
+              This book is not marked ready. Compiling produces the file the
+              printed codes are matched against, so mark it ready on the book
+              page first — that is where the pre-print checks run.
+            </p>
+          ) : null}
+
+          {contiguous && targets.length > 0 && book.status === 'ready' ? (
             <CompileClient bookId={bookId} targets={targets} />
           ) : null}
         </CardContent>
