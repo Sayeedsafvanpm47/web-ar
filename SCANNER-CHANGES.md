@@ -416,3 +416,25 @@ battery behind a full-screen video. The video itself resumes.
 **Needs a device.** Everything in Part 3 is unverified: the sheet, losing the
 photo while it is open, switching modes mid-playback, rotating in full screen,
 backgrounding with the overlay open, and returning to AR.
+
+### 26. The corner toggle follows playback (fixes two bugs in 24)
+
+Deviation 24 only ever unhid the toggle from inside `saveMode()`. Two
+consequences, both found while re-checking it:
+
+1. **On a return visit the toggle never appeared at all.** `mode` is restored
+   by reading `sessionStorage` directly, which does not call `saveMode()`, so a
+   customer who had already chosen once could never switch back.
+2. **Once shown it never hid**, so it sat over the viewfinder while merely
+   scanning, with nothing to re-present.
+
+`syncModeToggle()` now decides visibility from state rather than from which
+function last ran: visible when a mode is set **and** something is showing —
+anchored on the page, in the lost-card, or in the overlay. It is called from
+every transition that changes either (`startOnPhoto`, `enterFull`, `exitFull`,
+`showCard`, `hideCard`, and both detection events), and hidden outright while
+the choice sheet is open, since a toggle behind the sheet would be two ways to
+answer the same question at once.
+
+**Needs a device:** that the toggle appears on a second visit without the sheet
+being shown again, and that it disappears when a video stops.

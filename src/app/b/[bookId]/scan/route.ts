@@ -705,11 +705,25 @@ try {
 function saveMode(value) {
   mode = value;
   try { sessionStorage.setItem(MODE_KEY, value); } catch { /* ask again next time */ }
-  if (modeToggle) {
-    modeToggle.hidden = false;
-    modeToggle.classList.toggle('on', value === 'full');
-    modeToggle.setAttribute('aria-pressed', value === 'full' ? 'true' : 'false');
-  }
+  syncModeToggle();
+}
+
+/**
+ * The corner toggle is only useful while there is something to re-present, so
+ * it follows playback rather than appearing once and staying forever.
+ *
+ * Visible when a mode has been chosen AND a video is actually showing —
+ * anchored on the page, in the lost-card, or in the overlay. Hidden while
+ * merely scanning, so it does not sit over the viewfinder doing nothing.
+ */
+function syncModeToggle() {
+  if (!modeToggle) return;
+  const showing =
+    mode !== null &&
+    (fullOf >= 0 || current >= 0 || vids.classList.contains('is-card'));
+  modeToggle.hidden = !showing;
+  modeToggle.classList.toggle('on', mode === 'full');
+  modeToggle.setAttribute('aria-pressed', mode === 'full' ? 'true' : 'false');
 }
 
 // MindAR throws if stopped before it was started, and a failed teardown must
@@ -901,6 +915,7 @@ function showCard(i) {
   videos.forEach((v, j) => { v.style.display = j === i ? 'block' : 'none'; });
   sizeCard(i);
   vids.classList.add('is-card');
+  syncModeToggle();
 }
 
 // The card takes the video's own shape, capped so a tall portrait clip cannot
@@ -923,6 +938,7 @@ function sizeCard(i) {
 
 function hideCard() {
   vids.classList.remove('is-card');
+  syncModeToggle();
   vids.style.width = '';
   vids.style.height = '';
   vids.style.left = '';
@@ -963,6 +979,7 @@ function enterFull(i) {
 
   videos[i].muted = muted;
   videos[i].play().catch(e => console.warn('play blocked', e));
+  syncModeToggle();
 }
 
 function exitFull() {
@@ -978,6 +995,7 @@ function exitFull() {
   show(reticle); show(hint);
   // Keep playing: re-anchoring happens on the next targetFound.
   if (was >= 0) videos[was].play().catch(() => {});
+  syncModeToggle();
 }
 
 // A landscape clip on a rotated phone should fill the width. The overlay is
@@ -992,6 +1010,9 @@ window.addEventListener('resize', () => {
 function openSheet(i) {
   pendingChoice = i;
   sheet.hidden = false;
+  // The sheet is the choice; a toggle behind it would be two ways to answer
+  // the same question at once.
+  if (modeToggle) modeToggle.hidden = true;
 }
 
 function resolveSheet(chosen) {
@@ -1029,6 +1050,7 @@ function startOnPhoto(i) {
   revealPlane(i);
   videos[i].muted = muted;
   videos[i].play().catch(e => console.warn('play blocked', e));
+  syncModeToggle();
 }
 
 // --------------------------------------------------------- the frozen core --
@@ -1044,6 +1066,7 @@ targets.forEach((t, i) => {
       ensureSource(i)
         .then(() => { if (current === i) enterFull(i); })
         .catch(err => { console.warn('could not load video', err); showPlaybackError(i); });
+      syncModeToggle();
       draw();
       return;
     }
@@ -1093,11 +1116,11 @@ targets.forEach((t, i) => {
 
     // In full screen the photo leaving frame means nothing: the video is on
     // the phone, not the page. Do not pause, hide, or start the card timer.
-    if (mode === 'full' || fullOf >= 0) { draw(); return; }
+    if (mode === 'full' || fullOf >= 0) { syncModeToggle(); draw(); return; }
 
     // The sheet is open and waiting on an answer — keep it open and keep the
     // chosen memory ready rather than tearing it down underneath them.
-    if (pendingChoice === i) { draw(); return; }
+    if (pendingChoice === i) { syncModeToggle(); draw(); return; }
 
     show(reticle); show(hint);
     showCard(i);
