@@ -339,3 +339,80 @@ longer run off the screen, and nothing in the card is cropped.
 `player.tsx` forced `photoAspect` with `object-cover`. It now reads the real
 ratio on `loadedmetadata` and uses `object-contain`; the photo's ratio is kept
 only as a first-paint placeholder so the layout does not jump.
+
+---
+
+## Scanner rework — Part 3: presentation mode
+
+### 21. The scan identifies the memory; the mode decides presentation
+
+`mode` is `'photo'` or `'full'`, held in `sessionStorage` under `bp-mode`
+alongside `bp-unmuted`, in the same try/catch. If storage throws (private
+mode), `mode` stays null and the sheet is asked again on the next scan, which
+is the correct fallback rather than silently picking one.
+
+Target detection is untouched: `targetFound` still identifies which memory,
+and only the branch afterwards differs.
+
+### 22. First-scan choice sheet
+
+Shown on the first successful scan of a visit when no mode is stored. Two
+large targets, neither preselected, RTL-safe (`inset-inline-*`, no
+left/right). `ensureSource()` is called **before** the sheet opens, so the
+signed URL is already in flight and the tap is followed by playback rather
+than a wait.
+
+If the photo is lost while the sheet is open, the sheet stays and the chosen
+memory still plays — `targetLost` returns early when `pendingChoice` matches.
+The customer has already said which memory they meant; taking it away because
+their hand moved would be absurd.
+
+### 23. Full screen is a CSS overlay, NOT the Fullscreen API
+
+`#vids` gets `.is-full` (`position: fixed; inset: 0`, black, `object-fit:
+contain`, safe-area padding) exactly as the lost-card does. The `<video>`
+element **never moves in the DOM** — see deviation 8.
+
+**Why not `requestFullscreen` or `webkitEnterFullscreen`.** iPhone Safari has
+no element fullscreen at all, and `webkitEnterFullscreen` hands the video to
+the native player, which detaches the element A-Frame is using as a texture
+source. The AR plane would go blank and not recover on exit.
+
+While the overlay is open:
+
+- `targetLost` does not pause, hide, or start the `LOST_CARD_MS` timer — the
+  video is on the phone, not the page, so the photo leaving frame is irrelevant.
+- MindAR processing is paused with **`arSystem.pause(true)`**. From
+  `src/image-target/aframe.js`: `pause(keepVideo = false)` skips
+  `this.video.pause()` when `keepVideo` is true, then calls
+  `controller.stopProcessVideo()`. So the camera stream stays alive and
+  returning to AR is instant with no second permission prompt. `unpause()`
+  restarts both.
+- The anchor entities are set `visible="false"` so neither the video plane nor
+  the mat renders behind the overlay.
+- Orientation is **not** locked. The overlay is pure CSS so it reflows on
+  rotation; only the lost-card needs re-measuring, which a `resize` listener
+  does.
+- A new scan while in full screen swaps the overlay's video to the new memory.
+
+### 24. Mode toggle during playback
+
+A pill, top-trailing, shown whenever something is playing. Switching does not
+restart the video — `enterFull` / `exitFull` only change presentation — and
+writes the new mode to storage. Returning to AR re-anchors on the next
+`targetFound`.
+
+### 25. Teardown with the overlay open and MindAR paused
+
+`releaseCamera()` calls `exitFull()` first, then proceeds as before.
+`arSystem.stop()` calls `pause()` internally and stopping an
+already-stopped controller is a no-op, so a paused MindAR tears down the same
+way a running one does; `safe()` covers anything that still throws.
+
+`visibilitychange` no longer unpauses MindAR when returning to a tab that has
+the overlay open — it was paused deliberately there, and resuming would burn
+battery behind a full-screen video. The video itself resumes.
+
+**Needs a device.** Everything in Part 3 is unverified: the sheet, losing the
+photo while it is open, switching modes mid-playback, rotating in full screen,
+backgrounding with the overlay open, and returning to AR.

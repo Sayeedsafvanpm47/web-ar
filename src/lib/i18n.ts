@@ -78,6 +78,14 @@ type Dictionary = {
   };
 
   scanner: {
+    modeHeading: string;
+    modeBody: string;
+    modeOnPhoto: string;
+    modeOnPhotoHint: string;
+    modeFullScreen: string;
+    modeFullScreenHint: string;
+    modeToggleLabel: string;
+    closeFullScreen: string;
     intro: string;
     start: string;
     permissionNote: string;
@@ -164,6 +172,14 @@ const en: Dictionary = {
   },
 
   scanner: {
+    modeHeading: 'How would you like to watch?',
+    modeBody: 'You can change this at any time.',
+    modeOnPhoto: 'Play on the photo',
+    modeOnPhotoHint: 'The video appears on the printed page.',
+    modeFullScreen: 'Play full screen',
+    modeFullScreenHint: 'The video fills your phone.',
+    modeToggleLabel: 'Full screen',
+    closeFullScreen: 'Back to the page',
     intro: 'Hold your phone over a photo in your book and it starts playing.',
     start: 'Scan to play',
     permissionNote: 'We’ll ask for camera access next.',
@@ -255,6 +271,15 @@ const ar: Dictionary = {
   },
 
   scanner: {
+    // TODO-REVIEW
+    modeHeading: 'كيف تحب أن تشاهد؟',
+    modeBody: 'يمكنك تغيير ذلك في أي وقت.',
+    modeOnPhoto: 'التشغيل على الصورة',
+    modeOnPhotoHint: 'يظهر المقطع على الصفحة المطبوعة.',
+    modeFullScreen: 'ملء الشاشة',
+    modeFullScreenHint: 'يملأ المقطع شاشة هاتفك.',
+    modeToggleLabel: 'ملء الشاشة',
+    closeFullScreen: 'العودة إلى الصفحة',
     intro: 'وجّه هاتفك نحو صورة في الألبوم وسيبدأ تشغيلها.',
     start: 'امسح للتشغيل',
     permissionNote: 'سنطلب إذن استخدام الكاميرا بعد ذلك.',

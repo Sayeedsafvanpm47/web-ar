@@ -268,6 +268,72 @@ const BRAND_CSS = `
     padding: 6px 8px; white-space: pre; font: 12px ui-monospace, monospace;
   }
 
+  /* Mode sheet, shown once per visit on the first successful scan. */
+  #sheet {
+    position: fixed; inset: 0; z-index: 10004;
+    background: rgba(10, 10, 10, 0.92);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    display: flex; flex-direction: column; justify-content: flex-end;
+    padding: 2rem 1.25rem max(2rem, env(safe-area-inset-bottom));
+  }
+  #sheet h2 {
+    font-family: Fraunces, Georgia, serif; font-weight: 400;
+    font-size: 26px; line-height: 1.15; margin: 0 0 6px; text-align: center;
+  }
+  #sheet .sub { color: var(--grey-4); font-size: 13px; text-align: center; margin: 0 0 24px; }
+  .choice {
+    display: block; width: 100%; border: 1px solid rgba(250,250,248,0.25);
+    border-radius: 16px; background: transparent; color: var(--paper);
+    padding: 20px; margin-bottom: 12px; font: inherit; text-align: start;
+    cursor: pointer; min-height: 72px;
+  }
+  .choice strong { display: block; font-size: 17px; font-weight: 500; }
+  .choice span { display: block; color: var(--grey-4); font-size: 13px; margin-top: 4px; }
+
+  /* Mode toggle, shown whenever something is playing. */
+  #modetoggle {
+    position: fixed; z-index: 10002;
+    top: max(1rem, env(safe-area-inset-top)); inset-inline-end: 1rem;
+    display: flex; align-items: center; gap: 8px;
+    min-height: 44px; padding: 0 14px; border: 0; border-radius: 999px;
+    background: rgba(10,10,10,0.6); color: var(--paper);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  #modetoggle .dot {
+    width: 30px; height: 18px; border-radius: 999px;
+    background: rgba(250,250,248,0.25); position: relative; flex: none;
+  }
+  #modetoggle .dot::after {
+    content: ''; position: absolute; top: 3px; inset-inline-start: 3px;
+    width: 12px; height: 12px; border-radius: 50%; background: var(--paper);
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  #modetoggle.on .dot { background: rgba(250,250,248,0.55); }
+  #modetoggle.on .dot::after { transform: translateX(12px); }
+  [dir="rtl"] #modetoggle.on .dot::after { transform: translateX(-12px); }
+
+  /* Full screen is a CSS overlay, never the Fullscreen API — see deviation 23. */
+  #vids.is-full {
+    display: block; position: fixed; inset: 0; z-index: 10001;
+    width: auto; height: auto; background: #000;
+    border-radius: 0; box-shadow: none; animation: none;
+  }
+  #vids.is-full video {
+    width: 100%; height: 100%; display: block; object-fit: contain;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+    box-sizing: border-box; background: #000;
+  }
+  #closefull {
+    position: fixed; z-index: 10002;
+    bottom: max(1.5rem, env(safe-area-inset-bottom)); inset-inline-start: 1rem;
+    min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px;
+    background: rgba(250,250,248,0.92); color: var(--ink);
+    font: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+
   .fade { transition: opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
   .is-hidden { opacity: 0; pointer-events: none; }
   [hidden] { display: none !important; }
@@ -470,6 +536,28 @@ ${debug ? '<div id="dbg">booting</div>' : ''}
 
 <button id="unmute" class="pill" hidden>${escapeHtml(t.scanner.tapForSound)}</button>
 
+<button id="modetoggle" hidden aria-pressed="false">
+  <span class="dot" aria-hidden="true"></span>
+  <span>${escapeHtml(t.scanner.modeToggleLabel)}</span>
+</button>
+
+<button id="closefull" hidden>${escapeHtml(t.scanner.closeFullScreen)}</button>
+
+<div id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-h">
+  <div style="margin-top:auto">
+    <h2 id="sheet-h">${escapeHtml(t.scanner.modeHeading)}</h2>
+    <p class="sub">${escapeHtml(t.scanner.modeBody)}</p>
+    <button class="choice" id="choose-photo">
+      <strong>${escapeHtml(t.scanner.modeOnPhoto)}</strong>
+      <span>${escapeHtml(t.scanner.modeOnPhotoHint)}</span>
+    </button>
+    <button class="choice" id="choose-full">
+      <strong>${escapeHtml(t.scanner.modeFullScreen)}</strong>
+      <span>${escapeHtml(t.scanner.modeFullScreenHint)}</span>
+    </button>
+  </div>
+</div>
+
 <div id="vids">
 ${videoTags}
 </div>
@@ -494,6 +582,7 @@ const LOST_CARD_MS = ${LOST_CARD_MS};
 const MEDIA_BASE = ${embedJson(`/b/${book.id}/media/`)};
 const MEMORY_IDS = ${embedJson(ordered.map((m) => m.id))};
 const UNMUTE_KEY = 'bp-unmuted';
+const MODE_KEY = 'bp-mode';
 const T = ${embedJson({
     starting: t.scanner.starting,
     start: t.scanner.start,
@@ -588,11 +677,40 @@ const hint = document.querySelector('#hint');
 const reticle = document.querySelector('#reticle');
 const vignette = document.querySelector('#vignette');
 const vids = document.querySelector('#vids');
+const sheet = document.querySelector('#sheet');
+const modeToggle = document.querySelector('#modetoggle');
+const closeFull = document.querySelector('#closefull');
 
 let current = -1, startedAt = 0, ttfd = null, losses = 0, state = 'idle', lastErr = '';
 let started = false;
 let cardTimer = null;
 let lastFailed = -1;
+let lastPlayed = -1;
+
+// 'photo' = video anchored on the printed page. 'full' = CSS overlay.
+// The scan always decides WHICH memory; the mode only decides presentation.
+let mode = null;
+let fullOf = -1;        // memory currently shown in the overlay, or -1
+let pendingChoice = -1; // memory waiting on the sheet, or -1
+
+try {
+  const saved = sessionStorage.getItem(MODE_KEY);
+  if (saved === 'photo' || saved === 'full') mode = saved;
+} catch (err) {
+  // Private mode throws. Leaving mode null just means the sheet is shown
+  // again on the next scan, which is the correct fallback.
+  console.warn('sessionStorage unavailable', err);
+}
+
+function saveMode(value) {
+  mode = value;
+  try { sessionStorage.setItem(MODE_KEY, value); } catch { /* ask again next time */ }
+  if (modeToggle) {
+    modeToggle.hidden = false;
+    modeToggle.classList.toggle('on', value === 'full');
+    modeToggle.setAttribute('aria-pressed', value === 'full' ? 'true' : 'false');
+  }
+}
 
 // MindAR throws if stopped before it was started, and a failed teardown must
 // never be what stops the rest of the teardown running.
@@ -816,10 +934,120 @@ function cancelCardTimer() {
   if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; }
 }
 
+// ------------------------------------------------------------ full screen --
+// A CSS overlay, never the Fullscreen API and never webkitEnterFullscreen.
+// iPhone Safari has no element fullscreen, and its native player detaches the
+// <video> that A-Frame uses as a texture source — the AR plane would go blank
+// and not recover. So this restyles #vids exactly as the lost-card does, and
+// the <video> element never moves in the DOM (see deviation 8).
+function enterFull(i) {
+  if (i < 0) return;
+  fullOf = i;
+  cancelCardTimer();
+  vids.classList.remove('is-card');
+  vids.style.width = ''; vids.style.height = '';
+  vids.style.left = ''; vids.style.right = '';
+  videos.forEach((v, j) => { v.style.display = j === i ? 'block' : 'none'; });
+  vids.classList.add('is-full');
+  closeFull.hidden = false;
+  hide(reticle); hide(hint);
+
+  // Nothing of the AR scene should render behind the overlay.
+  targets.forEach(t => { t.setAttribute('visible', 'false'); });
+
+  // Stop processing frames but keep the camera stream alive, so returning to
+  // AR is instant and the permission prompt never reappears.
+  // src/image-target/aframe.js: pause(keepVideo = false) skips video.pause()
+  // when keepVideo is true, then calls controller.stopProcessVideo().
+  if (started) safe('ar.pause(keepVideo)', () => getAR().pause(true));
+
+  videos[i].muted = muted;
+  videos[i].play().catch(e => console.warn('play blocked', e));
+}
+
+function exitFull() {
+  const was = fullOf;
+  fullOf = -1;
+  vids.classList.remove('is-full');
+  videos.forEach(v => { v.style.display = 'none'; });
+  closeFull.hidden = true;
+  targets.forEach(t => { t.setAttribute('visible', 'true'); });
+
+  if (started) safe('ar.unpause', () => getAR().unpause());
+
+  show(reticle); show(hint);
+  // Keep playing: re-anchoring happens on the next targetFound.
+  if (was >= 0) videos[was].play().catch(() => {});
+}
+
+// A landscape clip on a rotated phone should fill the width. The overlay is
+// pure CSS so it reflows on its own; the card needs re-measuring.
+window.addEventListener('resize', () => {
+  if (vids.classList.contains('is-card') && current >= 0) sizeCard(current);
+});
+
+// ---------------------------------------------------------- the mode sheet --
+// Asked once per visit, on the first successful scan. The signed URL is
+// already being fetched while it is open, so the tap starts playback at once.
+function openSheet(i) {
+  pendingChoice = i;
+  sheet.hidden = false;
+}
+
+function resolveSheet(chosen) {
+  sheet.hidden = true;
+  saveMode(chosen);
+  const i = pendingChoice;
+  pendingChoice = -1;
+  if (i < 0) return;
+  // Play the chosen memory even if its photo was lost while the sheet was
+  // open — the customer already told us which memory they meant.
+  if (chosen === 'full') enterFull(i);
+  else startOnPhoto(i);
+}
+
+document.querySelector('#choose-photo').addEventListener('click', () => resolveSheet('photo'));
+document.querySelector('#choose-full').addEventListener('click', () => resolveSheet('full'));
+
+closeFull.addEventListener('click', () => { saveMode('photo'); exitFull(); });
+
+modeToggle.addEventListener('click', () => {
+  const next = mode === 'full' ? 'photo' : 'full';
+  saveMode(next);
+  // Switch presentation without restarting the video.
+  if (next === 'full') {
+    const i = fullOf >= 0 ? fullOf : (current >= 0 ? current : lastPlayed);
+    if (i >= 0) enterFull(i);
+  } else {
+    exitFull();
+  }
+});
+
+// Plays memory i anchored on the page.
+function startOnPhoto(i) {
+  if (current !== i && current >= 0) return;
+  revealPlane(i);
+  videos[i].muted = muted;
+  videos[i].play().catch(e => console.warn('play blocked', e));
+}
+
 // --------------------------------------------------------- the frozen core --
 targets.forEach((t, i) => {
   t.addEventListener('targetFound', () => {
     current = i;
+
+    // In full screen the scan still decides WHICH memory, but presentation
+    // does not change: a new photo swaps the overlay's video.
+    if (mode === 'full') {
+      cancelCardTimer();
+      lastPlayed = i;
+      ensureSource(i)
+        .then(() => { if (current === i) enterFull(i); })
+        .catch(err => { console.warn('could not load video', err); showPlaybackError(i); });
+      draw();
+      return;
+    }
+
     if (ttfd === null && startedAt) { ttfd = Math.round(performance.now() - startedAt); }
     cancelCardTimer();
     hideCard();
@@ -828,14 +1056,29 @@ targets.forEach((t, i) => {
     hide(reticle); hide(hint);
     t.querySelector('.scr').emit('settle');
 
-    ensureSource(i)
+    lastPlayed = i;
+
+    // Fetch starts immediately, including while the sheet is open, so the
+    // customer's tap is followed by playback rather than a spinner.
+    const loading = ensureSource(i);
+
+    if (mode === null) {
+      openSheet(i);
+      loading.catch(err => {
+        console.warn('could not load video', err);
+        if (pendingChoice === i) { sheet.hidden = true; pendingChoice = -1; showPlaybackError(i); }
+      });
+      draw();
+      return;
+    }
+
+    loading
       .then(() => {
+        if (mode === 'full') { enterFull(i); return; }
         // Still the current target? The customer may have moved on while the
         // URL was in flight.
         if (current !== i) return;
-        videos[i].muted = muted;
-        revealPlane(i);
-        return videos[i].play().catch(e => console.warn('play blocked', e));
+        startOnPhoto(i);
       })
       .catch(err => {
         console.warn('could not load video', err);
@@ -847,6 +1090,15 @@ targets.forEach((t, i) => {
   t.addEventListener('targetLost', () => {
     if (current === i) current = -1;
     losses++;
+
+    // In full screen the photo leaving frame means nothing: the video is on
+    // the phone, not the page. Do not pause, hide, or start the card timer.
+    if (mode === 'full' || fullOf >= 0) { draw(); return; }
+
+    // The sheet is open and waiting on an answer — keep it open and keep the
+    // chosen memory ready rather than tearing it down underneath them.
+    if (pendingChoice === i) { draw(); return; }
+
     show(reticle); show(hint);
     showCard(i);
     cancelCardTimer();
@@ -957,6 +1209,7 @@ try {
 
 function applyMuted() {
   videos.forEach(v => { v.muted = muted; });
+  // Identical in both modes: the pill is about sound, not presentation.
   unmuteBtn.hidden = !started || !muted;
 }
 
@@ -964,7 +1217,8 @@ unmuteBtn.addEventListener('click', () => {
   muted = false;
   try { sessionStorage.setItem(UNMUTE_KEY, '1'); } catch { /* not essential */ }
   applyMuted();
-  if (current >= 0) videos[current].play().catch(() => {});
+  const playing = fullOf >= 0 ? fullOf : current;
+  if (playing >= 0) videos[playing].play().catch(() => {});
   draw();
 });
 
@@ -1011,6 +1265,10 @@ function releaseCamera() {
   if (!started) return;
   started = false;
   cancelCardTimer();
+  // Works whether or not the overlay is open: stop() calls pause() internally,
+  // and pausing an already-paused controller is a no-op, so a paused MindAR
+  // tears down the same way a running one does. safe() covers the rest.
+  if (fullOf >= 0) exitFull();
   hideCard();
   videos.forEach(v => safe('video.pause', () => v.pause()));
   safe('ar.stop', () => getAR().stop());
@@ -1041,7 +1299,11 @@ document.addEventListener('visibilitychange', () => {
     videos.forEach(v => safe('video.pause', () => v.pause()));
     safe('ar.pause', () => ar.pause());
   } else {
-    safe('ar.unpause', () => ar.unpause());
+    // Do not resume processing while the overlay is open — it was paused on
+    // purpose there, and unpausing would burn battery behind a full-screen
+    // video. Exiting the overlay resumes it.
+    if (fullOf < 0) safe('ar.unpause', () => ar.unpause());
+    if (fullOf >= 0) videos[fullOf].play().catch(() => {});
   }
 });
 
