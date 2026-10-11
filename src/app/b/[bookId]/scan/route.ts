@@ -40,32 +40,63 @@ import { orderByTargetIndex } from '@/lib/target-mapping';
 /**
  * Tracking stability.
  *
- * MindAR smooths pose with a OneEuroFilter. Per the docs: lowering
- * filterMinCF reduces jitter at the cost of latency; raising filterBeta
- * reduces latency at the cost of jitter.
+ * Read from MindAR 1.2.5's own source, not from the docs, because the docs
+ * omit the one detail that matters: the units.
  *
- * A phone held over a page in a book moves slowly, so stability is worth far
- * more than responsiveness here — a video that visibly wobbles on a wedding
- * photo reads as broken. filterMinCF is dropped an order of magnitude below
- * the 0.001 default, with filterBeta left alone.
+ *   src/libs/one-euro-filter.js
+ *   src/image-target/controller.js:257
+ *     trackingState.filter.filter(Date.now(), worldMatrix)
  *
- * missTolerance is the number of consecutive undetected frames before the
- * target counts as lost. The default 5 makes the video blink out whenever a
- * hand or a glare crosses the page; doubling it rides through that.
+ * So `t` is milliseconds, and `x` is the whole 16-element 4x4 pose matrix,
+ * smoothed element by element. The filter is:
  *
- * warmupTolerance stays at its default. Lowering it would speed up first
- * detection but risk latching onto the wrong photo, and showing one family
- * another family's video is the worst outcome this product has.
+ *   cutOff = minCutOff + beta * |dxHat|          // dxHat in units per ms
+ *   a      = r / (r + 1),  r = 2*PI * cutOff * te
+ *   xHat   = a * x + (1 - a) * xPrev             // a = 1 means no smoothing
  *
- * All four are overridable from the query string so they can be tuned on a
- * real device without a redeploy.
+ * WHY THE OLD VALUES WOBBLED. At 60fps, te is about 16ms. Hand tremor moves a
+ * matrix element by roughly 1e-4 per millisecond. With the previous
+ * beta = 1000:
+ *
+ *   cutOff = 0.0001 + 1000 * 1e-4 = 0.1001
+ *   r      = 2*PI * 0.1001 * 16   = 10.1
+ *   a      = 10.1 / 11.1          = 0.91
+ *
+ * 91% of the raw, jittering pose passed straight through. During an ordinary
+ * pan (about 1e-3 per ms) it reaches a = 0.99 — the filter is doing nothing at
+ * all. beta = 1000 does not "reduce delay"; at these units it switches
+ * smoothing off the moment the phone is not perfectly still, which is always
+ * for a hand-held phone. Confirmed, not refuted.
+ *
+ * The old minCF of 0.0001 was the opposite error — a = 0.01 at rest, a ~1.7s
+ * settle — but nobody ever saw it, because beta masked it entirely.
+ *
+ * NEW DEFAULTS, same arithmetic:
+ *
+ *   tremor (1e-4/ms): cutOff = 0.001 + 15*1e-4 = 0.0025 -> a = 0.20
+ *   pan    (1e-3/ms): cutOff = 0.001 + 15*1e-3 = 0.016  -> a = 0.62
+ *
+ * Holds still against tremor, keeps up during a pan. minCF returns to the
+ * library default; beta drops by two orders of magnitude.
+ *
+ * Both stay overridable as ?minCF= and ?beta= for A/B testing on a device.
  */
 const TRACKING_DEFAULTS = {
-  filterMinCF: 0.0001,
-  filterBeta: 1000,
+  filterMinCF: 0.001,
+  filterBeta: 15,
   missTolerance: 10,
   warmupTolerance: 5,
 } as const;
+
+/**
+ * Per-frame pose interpolation, on top of the filter.
+ *
+ * The OneEuroFilter runs at MindAR's detection rate, which is well under the
+ * display's refresh rate, so even a well-tuned filter leaves visible stepping
+ * between updates. These lerp/slerp factors are applied every rendered frame
+ * toward the latest filtered pose. Disable with ?smooth=off.
+ */
+const SMOOTHING = { position: 0.35, rotation: 0.35 } as const;
 
 /**
  * How long a video keeps playing after its photo leaves frame.
@@ -331,6 +362,7 @@ export async function GET(
 
   const { book } = result;
   const debug = query.get('debug') === '1';
+  const smooth = query.get('smooth') !== 'off';
 
   const tracking = {
     filterMinCF: numParam(query, 'minCF', TRACKING_DEFAULTS.filterMinCF),
@@ -359,7 +391,7 @@ export async function GET(
   const targetEntities = ordered
     .map(
       (m) =>
-        `    <a-entity class="tgt" mindar-image-target="targetIndex: ${m.targetIndex}">
+        `    <a-entity class="tgt" mindar-image-target="targetIndex: ${m.targetIndex}" smooth-anchor="enabled: ${smooth}; pos: ${SMOOTHING.position}; rot: ${SMOOTHING.rotation}">
       <a-video class="scr" src="#v${m.targetIndex}" width="1" height="1"
                position="0 0 0.001" scale="0.97 0.97 1"
                animation__in="property: scale; to: 1 1 1; dur: 420; easing: easeOutCubic; startEvents: settle"></a-video>
@@ -466,6 +498,72 @@ const T = ${embedJson({
     cantLoadBody: t.states.unavailable.body,
   })};
 
+/**
+ * Per-frame pose interpolation on the tracked anchor.
+ *
+ * How this coexists with MindAR, which is the whole difficulty:
+ *
+ * mindar-image-target sets root.matrixAutoUpdate = false and then, on every
+ * detection, ASSIGNS A NEW Matrix4 to object3D.matrix
+ * (src/image-target/aframe.js, updateWorldMatrix). three.js therefore never
+ * recomputes that matrix from position/quaternion, and nothing else writes it.
+ *
+ * That gives a reliable way to tell a fresh pose from our own output without
+ * patching MindAR: object IDENTITY. If object3D.matrix is not the Matrix4 we
+ * last wrote, MindAR has just replaced it, so it is a new target to move
+ * toward. If it is ours, we are between detections and keep easing.
+ *
+ * We then write our own Matrix4 back into object3D.matrix. Because
+ * matrixAutoUpdate is false this survives to matrixWorld, and A-Frame runs
+ * every component tick before rendering, so the eased pose is what is drawn.
+ *
+ * On targetLost the entity goes invisible and MindAR assigns its all-zero
+ * invisibleMatrix; we skip those frames and drop our state, so the next find
+ * snaps to the real pose instead of sliding in from a stale one.
+ */
+AFRAME.registerComponent('smooth-anchor', {
+  schema: {
+    enabled: { type: 'boolean', default: true },
+    pos: { type: 'number', default: 0.35 },
+    rot: { type: 'number', default: 0.35 },
+  },
+  init: function () {
+    const THREE = AFRAME.THREE;
+    this.rawPos = new THREE.Vector3();
+    this.rawQuat = new THREE.Quaternion();
+    this.rawScale = new THREE.Vector3(1, 1, 1);
+    this.curPos = new THREE.Vector3();
+    this.curQuat = new THREE.Quaternion();
+    this.curScale = new THREE.Vector3(1, 1, 1);
+    this.out = new THREE.Matrix4();
+    this.seeded = false;
+  },
+  tick: function () {
+    const o = this.el.object3D;
+
+    if (!o.visible) { this.seeded = false; return; }
+    if (!this.data.enabled) return;
+
+    if (o.matrix !== this.out) {
+      // A pose MindAR just wrote. Decompose it as the new target.
+      o.matrix.decompose(this.rawPos, this.rawQuat, this.rawScale);
+      if (!this.seeded) {
+        this.curPos.copy(this.rawPos);
+        this.curQuat.copy(this.rawQuat);
+        this.curScale.copy(this.rawScale);
+        this.seeded = true;
+      }
+    }
+    if (!this.seeded) return;
+
+    this.curPos.lerp(this.rawPos, this.data.pos);
+    this.curQuat.slerp(this.rawQuat, this.data.rot);
+    this.curScale.lerp(this.rawScale, this.data.pos);
+    this.out.compose(this.curPos, this.curQuat, this.curScale);
+    o.matrix = this.out;
+  },
+});
+
 const scene = document.querySelector('a-scene');
 const getAR = () => scene.systems['mindar-image-system'];
 const targets = [...document.querySelectorAll('.tgt')];
@@ -503,6 +601,25 @@ const diag = () => [
 ].join(' ');
 
 window.addEventListener('error', e => { lastErr = (e.message || e.error) + ''; draw(); });
+
+// Rolling render FPS, so a jitter complaint can be told apart from a frame
+// rate problem. Measured over the last second of animation frames.
+let fps = 0;
+if (DEBUG) {
+  let frames = 0;
+  let since = performance.now();
+  const sample = () => {
+    frames++;
+    const now = performance.now();
+    if (now - since >= 1000) {
+      fps = Math.round((frames * 1000) / (now - since));
+      frames = 0;
+      since = now;
+    }
+    requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+}
 
 const draw = () => {
   if (!DEBUG || !dbg) return;

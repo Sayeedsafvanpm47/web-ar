@@ -223,3 +223,70 @@ blocked storage both throw, and staying muted is the safe default.
 
 To unblock all of these: extend the test book's hosting date in
 **/admin/books/[id] → Hosting and access**, then reload the scanner.
+
+---
+
+## Scanner rework — Part 1: smoothing
+
+### 14. Filter defaults corrected from the source, not the docs
+
+`filterMinCF` 0.0001 -> **0.001**, `filterBeta` 1000 -> **15**.
+
+Read from MindAR 1.2.5 directly: `src/libs/one-euro-filter.js`, called at
+`src/image-target/controller.js:257` as
+`trackingState.filter.filter(Date.now(), worldMatrix)`. So `t` is in
+**milliseconds** and `x` is the entire **16-element pose matrix**, smoothed
+element-wise.
+
+```
+cutOff = minCutOff + beta * |dxHat|      // dxHat in units per millisecond
+a      = r / (r + 1),  r = 2*PI * cutOff * te
+xHat   = a * x + (1 - a) * xPrev         // a = 1 means no smoothing at all
+```
+
+**The owner's suspicion is confirmed.** At 60fps (te ~ 16ms) and hand tremor
+of ~1e-4 per ms, `beta = 1000` gives `cutOff = 0.1001`, `r = 10.1`,
+**`a = 0.91`** — 91% of the raw jitter passes straight through. During an
+ordinary pan (~1e-3 per ms) it reaches `a = 0.99`. At these units beta=1000
+does not "reduce delay"; it disables smoothing whenever the phone is not
+perfectly still, which for a hand-held phone is always.
+
+The old `minCF` of 0.0001 was the opposite error (`a = 0.01` at rest, ~1.7s to
+settle) and was never visible because beta masked it.
+
+New values, same arithmetic: tremor -> `a = 0.20`, pan -> `a = 0.62`.
+
+**Needs a device.** The A/B table is in the task summary; `?minCF=` and
+`?beta=` still override.
+
+### 15. Per-frame pose interpolation (lerp/slerp), `?smooth=off`
+
+Filter tuning alone cannot remove all stepping: the filter runs at MindAR's
+detection rate, which is below the display refresh rate, so the pose updates in
+visible steps between detections. A `smooth-anchor` component eases toward the
+latest filtered pose every rendered frame.
+
+**How it coexists with MindAR.** `mindar-image-target` sets
+`root.matrixAutoUpdate = false` and then **assigns a new `Matrix4`** to
+`object3D.matrix` on each detection (`src/image-target/aframe.js`,
+`updateWorldMatrix`). Two consequences are what make this safe:
+
+1. three.js never recomputes that matrix from position/quaternion, and nothing
+   else writes it — so our own write survives through to `matrixWorld`.
+2. A fresh pose can be told from our own output by **object identity**: if
+   `object3D.matrix` is not the `Matrix4` we last wrote, MindAR has just
+   replaced it. No patching or monkey-wrapping of MindAR is needed.
+
+A-Frame runs component `tick()`s before rendering, so the eased pose is the one
+drawn that frame. On `targetLost` the entity goes invisible and MindAR assigns
+its all-zero `invisibleMatrix`; those frames are skipped and the eased state is
+dropped, so the next find snaps to the true pose rather than sliding in from a
+stale one.
+
+**Needs a device.** If the video feels like it trails the photo, lower the
+factors or use `?smooth=off` to isolate filter behaviour from interpolation.
+
+### 16. Rolling FPS in the `?debug=1` readout
+
+So a "it wobbles" report can be separated from a frame-rate problem. Measured
+over the last second of animation frames; only runs when debug is on.
