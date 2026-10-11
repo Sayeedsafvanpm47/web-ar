@@ -13,8 +13,14 @@ type Copy = {
 /**
  * The no-camera player.
  *
- * Same presentation as a scan: the video fills the frame at the printed
- * photo's aspect ratio, on ink, with sound behind one tap.
+ * The video is shown WHOLE, at its own aspect ratio — never cropped, never
+ * stretched, whatever shape it is. The printed photo's ratio is used only as a
+ * placeholder for the first paint, so the page does not jump when the real
+ * dimensions arrive on loadedmetadata; after that the video's own ratio wins.
+ *
+ * It previously forced the photo's ratio with object-cover, which silently cut
+ * the sides off a portrait clip on a landscape page. A customer watching their
+ * own wedding video should see all of it.
  *
  * Muted autoplay first. iOS blocks autoplay with sound and no amount of
  * cleverness changes that, so the unmute control is part of the design rather
@@ -36,10 +42,11 @@ export function MemoryPlayer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const [muted, setMuted] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [videoAspect, setVideoAspect] = useState<number | null>(null);
 
-  // The printed photo's ratio, not the video's — a video exported at a
-  // different ratio is letterboxed by object-cover rather than stretched.
-  const aspect = photoAspect && photoAspect > 0 ? 1 / photoAspect : undefined;
+  // Placeholder only, until the video reports its own dimensions.
+  const placeholder = photoAspect && photoAspect > 0 ? 1 / photoAspect : undefined;
+  const aspect = videoAspect ?? placeholder;
 
   function unmute() {
     const video = videoRef.current;
@@ -85,7 +92,7 @@ export function MemoryPlayer({
           ref={videoRef}
           src={videoUrl}
           poster={posterUrl ?? undefined}
-          className="h-full w-full object-cover"
+          className="h-full w-full object-contain"
           autoPlay
           loop
           muted
@@ -94,6 +101,12 @@ export function MemoryPlayer({
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           {...({ 'webkit-playsinline': 'true' } as any)}
           controls={!muted}
+          onLoadedMetadata={(e) => {
+            const el = e.currentTarget;
+            if (el.videoWidth > 0 && el.videoHeight > 0) {
+              setVideoAspect(el.videoWidth / el.videoHeight);
+            }
+          }}
           onError={() => setFailed(true)}
         />
       </div>

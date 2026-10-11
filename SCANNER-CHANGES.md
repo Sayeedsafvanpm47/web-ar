@@ -290,3 +290,52 @@ factors or use `?smooth=off` to isolate filter behaviour from interpolation.
 
 So a "it wobbles" report can be separated from a frame-rate problem. Measured
 over the last second of animation frames; only runs when debug is on.
+
+---
+
+## Scanner rework — Part 2: true aspect ratio
+
+### 17. containFit() replaces coverFit() — the video is never cropped
+
+Deviation 11 cropped the texture so the video filled the photo's plane. That
+was the wrong trade: a portrait clip on a landscape page lost its sides, and a
+customer watching their own wedding video should see all of it.
+
+`containFit()` instead **resizes the plane geometry** once `videoWidth` /
+`videoHeight` are known, so the video sits inside the photo's bounds at its own
+ratio, centred, whole.
+
+**Why not just `texture.repeat < 1`.** That would letterbox, but three.js
+textures wrap `ClampToEdge` by default, so the region outside 0..1 repeats the
+edge pixel — a smear of stretched colour down the margins instead of nothing.
+Resizing the geometry has no such artefact. `repeat` and `offset` are reset to
+`1,1` and `0,0`.
+
+The photo plane remains `width = 1`, `height = ASPECT[i]`, so nothing about the
+anchor geometry or target mapping changes.
+
+**Needs a device:** portrait video on a landscape photo, landscape video on a
+portrait photo, square, 4:3 and 21:9.
+
+### 18. A backing mat behind the video, `?mat=off`
+
+With contain, the margin would otherwise show the printed photo peeking out
+around its own video. An `<a-plane class="mat">` at the photo's exact size sits
+at z 0.0005 — between the photo surface and the video at 0.001 — in black at
+0.85 opacity, fading in with the video so the margin reads as a frame.
+
+It is a sibling inside the same anchor entity, so it inherits the tracked pose
+and needs no separate handling. `?mat=off` renders it invisible for comparison.
+
+### 19. Lost-video card takes the video's own shape
+
+The card box is now sized from `videoWidth`/`videoHeight`, capped to
+`min(viewport - 32px, 520px)` wide and 42% of viewport height, with
+`object-fit: contain` and a black bed inside. A tall portrait clip can no
+longer run off the screen, and nothing in the card is cropped.
+
+### 20. The no-camera player uses the video's ratio, not the photo's
+
+`player.tsx` forced `photoAspect` with `object-cover`. It now reads the real
+ratio on `loadedmetadata` and uses `object-contain`; the photo's ratio is kept
+only as a first-paint placeholder so the layout does not jump.

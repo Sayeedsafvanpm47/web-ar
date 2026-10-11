@@ -253,7 +253,10 @@ const BRAND_CSS = `
     box-shadow: 0 10px 40px rgba(0,0,0,0.5);
     animation: cardin 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   }
-  #vids.is-card video { width: 100%; height: auto; display: block; }
+  #vids.is-card video {
+    width: 100%; height: 100%; display: block;
+    object-fit: contain; background: #000;
+  }
   @keyframes cardin {
     from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: translateY(0); }
@@ -363,6 +366,7 @@ export async function GET(
   const { book } = result;
   const debug = query.get('debug') === '1';
   const smooth = query.get('smooth') !== 'off';
+  const mat = query.get('mat') !== 'off';
 
   const tracking = {
     filterMinCF: numParam(query, 'minCF', TRACKING_DEFAULTS.filterMinCF),
@@ -392,6 +396,9 @@ export async function GET(
     .map(
       (m) =>
         `    <a-entity class="tgt" mindar-image-target="targetIndex: ${m.targetIndex}" smooth-anchor="enabled: ${smooth}; pos: ${SMOOTHING.position}; rot: ${SMOOTHING.rotation}">
+      <a-plane class="mat" width="1" height="${(m.photoAspect ?? 1).toFixed(4)}"
+               position="0 0 0.0005" color="#000000"
+               material="transparent: true; opacity: 0"${mat ? '' : ' visible="false"'}></a-plane>
       <a-video class="scr" src="#v${m.targetIndex}" width="1" height="1"
                position="0 0 0.001" scale="0.97 0.97 1"
                animation__in="property: scale; to: 1 1 1; dur: 420; easing: easeOutCubic; startEvents: settle"></a-video>
@@ -682,7 +689,7 @@ async function ensureSource(i, { retry = true } = {}) {
     safe('material.refresh', () => {
       targets[i].querySelector('.scr').setAttribute('material', 'src', '#v' + i);
     });
-    coverFit(i);
+    containFit(i);
   } catch (err) {
     sources[i] = null;
     if (retry) {
@@ -694,30 +701,47 @@ async function ensureSource(i, { retry = true } = {}) {
   }
 }
 
-// ------------------------------------------------------------- cover fit ----
-// The plane is sized to the PRINTED photo. A video shot at a different ratio
-// would otherwise be stretched to fit it. Cropping the texture instead gives
-// object-fit: cover — no stretching, no letterbox bars.
-function coverFit(i) {
+// ----------------------------------------------------------- contain fit ----
+// The video shows its WHOLE frame, at its own aspect ratio, fitted inside the
+// printed photo's bounds. Never cropped, never stretched, for any ratio.
+//
+// Done by resizing the plane's geometry once the video's dimensions are known,
+// NOT by cropping the texture. texture.repeat < 1 would letterbox, but the
+// texture wraps ClampToEdge, so the area outside 0..1 smears the edge pixel
+// across the margin instead of showing nothing. Resizing the geometry has no
+// such artefact, and leaves repeat/offset at their identity values.
+function containFit(i) {
   const v = videos[i];
   const el = targets[i].querySelector('.scr');
-  const mesh = el.getObject3D('mesh');
-  const tex = mesh && mesh.material && mesh.material.map;
-  if (!tex || !v.videoWidth || !v.videoHeight) return;
+  if (!v.videoWidth || !v.videoHeight) return;
 
-  const planeAR = 1 / (ASPECT[i] || (v.videoHeight / v.videoWidth) || 1);
+  const photoH = ASPECT[i] || (v.videoHeight / v.videoWidth) || 1;  // width is 1
   const videoAR = v.videoWidth / v.videoHeight;
+  const photoAR = 1 / photoH;
 
-  if (videoAR > planeAR) {
-    const r = planeAR / videoAR;           // video is wider — crop the sides
-    tex.repeat.set(r, 1);
-    tex.offset.set((1 - r) / 2, 0);
+  let w, h;
+  if (videoAR > photoAR) {
+    w = 1;                  // video is wider than the photo: fit to its width
+    h = 1 / videoAR;
   } else {
-    const r = videoAR / planeAR;           // video is taller — crop top/bottom
-    tex.repeat.set(1, r);
-    tex.offset.set(0, (1 - r) / 2);
+    h = photoH;             // video is taller: fit to the photo's height
+    w = photoH * videoAR;
   }
-  tex.needsUpdate = true;
+
+  safe('plane.resize', () => {
+    el.setAttribute('width', w.toFixed(5));
+    el.setAttribute('height', h.toFixed(5));
+  });
+
+  // Undo any cropping a previous build may have left on the texture.
+  safe('texture.reset', () => {
+    const mesh = el.getObject3D('mesh');
+    const tex = mesh && mesh.material && mesh.material.map;
+    if (!tex) return;
+    tex.repeat.set(1, 1);
+    tex.offset.set(0, 0);
+    tex.needsUpdate = true;
+  });
 }
 
 // --------------------------------------------------------------- fade in ----
@@ -728,6 +752,15 @@ function setPlaneOpacity(i, value) {
   safe('plane.opacity', () => {
     targets[i].querySelector('.scr')
       .setAttribute('material', 'transparent: true; opacity: ' + value);
+  });
+  // The mat sits just behind the video at the photo's exact size, so the
+  // letterbox margin reads as a frame rather than the printed photo showing
+  // through half of its own video. It fades with the video.
+  safe('mat.opacity', () => {
+    const matEl = targets[i].querySelector('.mat');
+    if (matEl) {
+      matEl.setAttribute('material', 'transparent: true; opacity: ' + (value * 0.85));
+    }
   });
 }
 
@@ -748,11 +781,34 @@ function revealPlane(i) {
 // glare or a deliberate page turn does not read as a crash.
 function showCard(i) {
   videos.forEach((v, j) => { v.style.display = j === i ? 'block' : 'none'; });
+  sizeCard(i);
   vids.classList.add('is-card');
+}
+
+// The card takes the video's own shape, capped so a tall portrait clip cannot
+// run off the screen. object-fit: contain inside it means any leftover box is
+// black rather than a cropped frame.
+function sizeCard(i) {
+  const v = videos[i];
+  if (!v || !v.videoWidth || !v.videoHeight) return;
+  const ar = v.videoWidth / v.videoHeight;
+  const maxW = Math.min(window.innerWidth - 32, 520);
+  const maxH = window.innerHeight * 0.42;
+  let w = maxW;
+  let h = w / ar;
+  if (h > maxH) { h = maxH; w = h * ar; }
+  vids.style.width = Math.round(w) + 'px';
+  vids.style.height = Math.round(h) + 'px';
+  vids.style.left = 'calc(50% - ' + Math.round(w / 2) + 'px)';
+  vids.style.right = 'auto';
 }
 
 function hideCard() {
   vids.classList.remove('is-card');
+  vids.style.width = '';
+  vids.style.height = '';
+  vids.style.left = '';
+  vids.style.right = '';
   videos.forEach(v => { v.style.display = 'none'; });
 }
 
